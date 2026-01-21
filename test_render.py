@@ -118,8 +118,8 @@ def render_mesh_o3d(mesh, texture_image, uvs, azimuth, elevation=20.0, distance=
     if texture_array.shape[2] == 4:
         texture_array = texture_array[:, :, :3]
 
-    # Flip texture vertically for Open3D
-    texture_array = np.flipud(texture_array)
+    # Flip texture vertically for Open3D and make contiguous
+    texture_array = np.ascontiguousarray(np.flipud(texture_array))
 
     o3d_mesh.textures = [o3d.geometry.Image(texture_array)]
     o3d_mesh.triangle_uvs = o3d.utility.Vector2dVector(uvs[mesh.faces.flatten()])

@@ -56,6 +56,78 @@ sys.modules['torchmcubes'] = torchmcubes
 from PIL import Image
 from tsr.system import TSR
 
+
+def resize_foreground(image, ratio=0.85):
+    """
+    Resize foreground using alpha channel to find object bounds.
+    This is the crucial preprocessing step from TripoSR.
+
+    Args:
+        image: PIL Image in RGBA mode
+        ratio: Target occupancy ratio (0.85 = object fills 85% of the image)
+    """
+    image = np.array(image)
+    assert image.shape[-1] == 4, "Image must be RGBA"
+
+    # Find non-transparent pixels using alpha channel
+    alpha = np.where(image[..., 3] > 0)
+
+    if len(alpha[0]) == 0:
+        print("Warning: No foreground pixels found!")
+        return Image.fromarray(image)
+
+    # Extract bounding box of foreground
+    y1, y2 = alpha[0].min(), alpha[0].max()
+    x1, x2 = alpha[1].min(), alpha[1].max()
+
+    print(f"  Foreground bounds: x=[{x1}, {x2}], y=[{y1}, {y2}]")
+
+    # Crop to foreground
+    fg = image[y1:y2, x1:x2]
+
+    # Pad to square
+    size = max(fg.shape[0], fg.shape[1])
+    ph0, pw0 = (size - fg.shape[0]) // 2, (size - fg.shape[1]) // 2
+    ph1, pw1 = size - fg.shape[0] - ph0, size - fg.shape[1] - pw0
+    new_image = np.pad(
+        fg,
+        ((ph0, ph1), (pw0, pw1), (0, 0)),
+        mode="constant",
+        constant_values=0,
+    )
+
+    # Add padding according to ratio
+    new_size = int(new_image.shape[0] / ratio)
+    ph0, pw0 = (new_size - size) // 2, (new_size - size) // 2
+    ph1, pw1 = new_size - size - ph0, new_size - size - pw0
+    new_image = np.pad(
+        new_image,
+        ((ph0, ph1), (pw0, pw1), (0, 0)),
+        mode="constant",
+        constant_values=0,
+    )
+
+    print(f"  Resized foreground: {new_image.shape}")
+    return Image.fromarray(new_image)
+
+
+def rgba_to_rgb_with_gray_background(image):
+    """
+    Convert RGBA to RGB by compositing with gray (0.5) background.
+    This is how TripoSR expects the input.
+    """
+    image_np = np.array(image).astype(np.float32) / 255.0
+
+    rgb = image_np[:, :, :3]
+    alpha = image_np[:, :, 3:4]
+
+    # Composite with 0.5 gray background (TripoSR default)
+    composited = rgb * alpha + (1 - alpha) * 0.5
+
+    result = (composited * 255.0).astype(np.uint8)
+    return Image.fromarray(result, 'RGB')
+
+
 print("Loading model...")
 model = TSR.from_pretrained(
     "stabilityai/TripoSR",
@@ -66,16 +138,24 @@ model.to("cuda:0")
 
 print("Loading image...")
 image = Image.open("TripoSR/examples/chair.png")
+print(f"Original image: mode={image.mode}, size={image.size}")
 
-# Convert RGBA to RGB with white background
-if image.mode == 'RGBA':
-    background = Image.new('RGB', image.size, (255, 255, 255))
-    background.paste(image, mask=image.split()[3])
-    image = background
-    print(f"Converted RGBA to RGB, size: {image.size}")
-elif image.mode != 'RGB':
-    image = image.convert('RGB')
-    print(f"Converted {image.mode} to RGB")
+# Convert to RGBA if needed
+if image.mode != 'RGBA':
+    image = image.convert('RGBA')
+    print(f"Converted to RGBA")
+
+# Step 1: Resize foreground using alpha channel (CRUCIAL STEP!)
+print("Preprocessing: resize_foreground...")
+image = resize_foreground(image, ratio=0.85)
+image.save("/tmp/chair_preprocessed_rgba.png")
+print(f"Saved preprocessed RGBA to /tmp/chair_preprocessed_rgba.png")
+
+# Step 2: Convert RGBA to RGB with gray background
+print("Converting RGBA to RGB with gray background...")
+image = rgba_to_rgb_with_gray_background(image)
+image.save("/tmp/chair_preprocessed_rgb.png")
+print(f"Final RGB image: size={image.size}")
 
 print("Running inference...")
 with torch.no_grad():

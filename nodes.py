@@ -150,6 +150,93 @@ _patch_torchmcubes()
 _triposr_model_cache = {}
 
 
+def resize_foreground(image: Image.Image, ratio: float = 0.85) -> Image.Image:
+    """
+    Resize foreground using alpha channel to find object bounds.
+    This is the crucial preprocessing step from TripoSR's utils.
+
+    Args:
+        image: PIL Image in RGBA mode with transparent background
+        ratio: Target occupancy ratio (0.85 = object fills 85% of the image)
+
+    Returns:
+        RGBA image with foreground centered and padded
+    """
+    image_np = np.array(image)
+
+    if image_np.shape[-1] != 4:
+        print("[TripoSR] Warning: resize_foreground expects RGBA image, got", image_np.shape)
+        return image
+
+    # Find non-transparent pixels using alpha channel
+    alpha = np.where(image_np[..., 3] > 0)
+
+    if len(alpha[0]) == 0:
+        print("[TripoSR] Warning: No foreground pixels found (all transparent)")
+        return image
+
+    # Extract bounding box of foreground
+    y1, y2 = alpha[0].min(), alpha[0].max()
+    x1, x2 = alpha[1].min(), alpha[1].max()
+
+    print(f"[TripoSR] Foreground bounds: x=[{x1}, {x2}], y=[{y1}, {y2}]")
+
+    # Crop to foreground
+    fg = image_np[y1:y2, x1:x2]
+
+    # Pad to square
+    size = max(fg.shape[0], fg.shape[1])
+    ph0, pw0 = (size - fg.shape[0]) // 2, (size - fg.shape[1]) // 2
+    ph1, pw1 = size - fg.shape[0] - ph0, size - fg.shape[1] - pw0
+    new_image = np.pad(
+        fg,
+        ((ph0, ph1), (pw0, pw1), (0, 0)),
+        mode="constant",
+        constant_values=0,
+    )
+
+    # Add padding according to ratio
+    new_size = int(new_image.shape[0] / ratio)
+    ph0, pw0 = (new_size - size) // 2, (new_size - size) // 2
+    ph1, pw1 = new_size - size - ph0, new_size - size - pw0
+    new_image = np.pad(
+        new_image,
+        ((ph0, ph1), (pw0, pw1), (0, 0)),
+        mode="constant",
+        constant_values=0,
+    )
+
+    print(f"[TripoSR] Resized foreground: {new_image.shape[0]}x{new_image.shape[1]}")
+    return Image.fromarray(new_image)
+
+
+def rgba_to_rgb_gray_background(image: Image.Image) -> Image.Image:
+    """
+    Convert RGBA to RGB by compositing with gray (0.5) background.
+    This matches TripoSR's expected preprocessing.
+
+    Args:
+        image: PIL Image in RGBA mode
+
+    Returns:
+        RGB image with gray background where transparency was
+    """
+    image_np = np.array(image).astype(np.float32) / 255.0
+
+    if image_np.shape[-1] != 4:
+        # Already RGB or other format
+        return image.convert('RGB')
+
+    rgb = image_np[:, :, :3]
+    alpha = image_np[:, :, 3:4]
+
+    # Composite with 0.5 gray background (TripoSR default)
+    composited = rgb * alpha + (1 - alpha) * 0.5
+
+    result = (composited * 255.0).astype(np.uint8)
+    return Image.fromarray(result, 'RGB')
+
+
 def get_triposr_checkpoints():
     """Get list of available TripoSR checkpoints from models directory."""
     import folder_paths
@@ -270,8 +357,17 @@ class ImageTo3DMesh:
     """
     Converts an input image to a 3D mesh using TripoSR.
 
-    Note: Use ComfyUI's background removal nodes before this node
-    for best results with TripoSR.
+    IMPORTANT: For best results, provide an RGBA image with transparent background.
+    Use ComfyUI's background removal nodes before this node.
+
+    The preprocessing pipeline:
+    1. resize_foreground() - Uses alpha channel to find the object's bounding box,
+       crops to just the foreground, and centers it with proper padding (85% occupancy)
+    2. rgba_to_rgb_gray_background() - Composites RGBA to RGB with 0.5 gray background,
+       which is how TripoSR expects its input
+
+    Without proper alpha channel, TripoSR cannot distinguish foreground from background,
+    resulting in flat "relief" meshes instead of proper 3D.
     """
 
     CATEGORY = "TripoSR"
@@ -298,12 +394,20 @@ class ImageTo3DMesh:
         # Handle RGBA images (from ComfyUI background removal)
         if img_np.shape[2] == 4:
             pil_image = Image.fromarray(img_np, 'RGBA')
-            # Create white background for transparent areas
-            background = Image.new('RGB', pil_image.size, (255, 255, 255))
-            background.paste(pil_image, mask=pil_image.split()[3])
-            pil_image = background
+            print(f"[TripoSR] Input: RGBA image {pil_image.size}")
+
+            # CRUCIAL: Use TripoSR's preprocessing pipeline
+            # Step 1: Resize foreground using alpha channel to find and center object
+            pil_image = resize_foreground(pil_image, ratio=0.85)
+            print(f"[TripoSR] After resize_foreground: {pil_image.size}")
+
+            # Step 2: Convert RGBA to RGB with gray background (TripoSR's default)
+            pil_image = rgba_to_rgb_gray_background(pil_image)
+            print(f"[TripoSR] After RGBA->RGB: {pil_image.size}, mode={pil_image.mode}")
         else:
             pil_image = Image.fromarray(img_np, 'RGB')
+            print(f"[TripoSR] Input: RGB image {pil_image.size} (no alpha channel)")
+            print("[TripoSR] Warning: For best results, use an RGBA image with transparent background")
 
         # Ensure image is RGB (TripoSR expects RGB)
         if pil_image.mode != 'RGB':
@@ -325,6 +429,13 @@ class ImageTo3DMesh:
 
         mesh = meshes[0]
         print(f"[TripoSR] Mesh generated: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
+
+        # Log mesh bounds for debugging
+        if len(mesh.vertices) > 0:
+            verts = mesh.vertices
+            print(f"[TripoSR] Mesh bounds: X=[{verts[:,0].min():.3f}, {verts[:,0].max():.3f}], "
+                  f"Y=[{verts[:,1].min():.3f}, {verts[:,1].max():.3f}], "
+                  f"Z=[{verts[:,2].min():.3f}, {verts[:,2].max():.3f}]")
 
         return (mesh,)
 

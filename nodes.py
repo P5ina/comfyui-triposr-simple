@@ -31,8 +31,35 @@ import pyrender
 
 
 # ============================================================================
-# Patch torchmcubes to use scikit-image if torchmcubes is not available
+# Patch missing modules before importing TripoSR
 # ============================================================================
+import types
+
+def _patch_rembg():
+    """Create a fake rembg module (user should use ComfyUI's background removal)."""
+    try:
+        import rembg
+        return  # Already available
+    except ImportError:
+        pass
+
+    print("[TripoSR] rembg not found, creating stub (use ComfyUI background removal instead)")
+
+    def remove(image, session=None, **kwargs):
+        """Stub - returns image unchanged. Use ComfyUI's background removal nodes."""
+        print("[TripoSR] Warning: rembg.remove() called but rembg not installed. Image unchanged.")
+        return image
+
+    def new_session(*args, **kwargs):
+        """Stub session creator."""
+        return None
+
+    # Create fake module
+    fake_rembg = types.ModuleType('rembg')
+    fake_rembg.remove = remove
+    fake_rembg.new_session = new_session
+    sys.modules['rembg'] = fake_rembg
+
 def _patch_torchmcubes():
     """Create a fake torchmcubes module using scikit-image marching cubes."""
     try:
@@ -44,7 +71,6 @@ def _patch_torchmcubes():
     print("[TripoSR] torchmcubes not found, using scikit-image marching cubes fallback")
 
     from skimage import measure
-    import types
 
     def marching_cubes(volume, threshold):
         """
@@ -75,6 +101,8 @@ def _patch_torchmcubes():
     fake_module.marching_cubes = marching_cubes
     sys.modules['torchmcubes'] = fake_module
 
+# Apply patches BEFORE any TripoSR imports
+_patch_rembg()
 _patch_torchmcubes()
 # ============================================================================
 

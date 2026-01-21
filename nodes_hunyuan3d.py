@@ -327,6 +327,8 @@ class ImageTo3DMeshHunyuan:
 class LoadHunyuan3DTextureModel:
     """
     Loads the Hunyuan3D-2 texture/paint model for adding textures to meshes.
+
+    Use 'turbo' version for faster generation (recommended).
     """
 
     CATEGORY = "Hunyuan3D"
@@ -339,21 +341,26 @@ class LoadHunyuan3DTextureModel:
         return {
             "required": {
                 "model_path": (["tencent/Hunyuan3D-2"],),
+                "model_variant": (["turbo (fast)", "standard"],),
                 "device": (["cuda:0", "cuda:1", "cpu"],),
                 "low_vram_mode": ("BOOLEAN", {"default": True}),
             }
         }
 
-    def load(self, model_path: str, device: str, low_vram_mode: bool):
+    def load(self, model_path: str, model_variant: str, device: str, low_vram_mode: bool):
         global _hunyuan3d_texture_model_cache
 
-        cache_key = f"tex_{model_path}_{device}_{low_vram_mode}"
+        # Determine subfolder based on variant
+        use_turbo = "turbo" in model_variant.lower()
+        subfolder = "hunyuan3d-paint-v2-0-turbo" if use_turbo else "hunyuan3d-paint-v2-0"
+
+        cache_key = f"tex_{model_path}_{subfolder}_{device}_{low_vram_mode}"
 
         if cache_key in _hunyuan3d_texture_model_cache:
-            print(f"[Hunyuan3D-Tex] Using cached texture model")
+            print(f"[Hunyuan3D-Tex] Using cached texture model ({subfolder})")
             return (_hunyuan3d_texture_model_cache[cache_key],)
 
-        print(f"[Hunyuan3D-Tex] Loading texture model: {model_path} on {device}...")
+        print(f"[Hunyuan3D-Tex] Loading texture model: {model_path}/{subfolder} on {device}...")
 
         try:
             from hy3dgen.texgen import Hunyuan3DPaintPipeline
@@ -363,7 +370,7 @@ class LoadHunyuan3DTextureModel:
                 "  pip install git+https://github.com/Tencent/Hunyuan3D-2.git"
             )
 
-        pipeline = Hunyuan3DPaintPipeline.from_pretrained(model_path)
+        pipeline = Hunyuan3DPaintPipeline.from_pretrained(model_path, subfolder=subfolder)
 
         # Hunyuan3DPaintPipeline doesn't support .to() method
         # Always use CPU offload for memory management
@@ -375,9 +382,24 @@ class LoadHunyuan3DTextureModel:
             print(f"[Hunyuan3D-Tex] Model loaded (device managed internally)")
 
         _hunyuan3d_texture_model_cache[cache_key] = pipeline
-        print(f"[Hunyuan3D-Tex] Texture model loaded successfully")
+        print(f"[Hunyuan3D-Tex] Texture model loaded successfully ({'TURBO' if use_turbo else 'standard'})")
 
         return (pipeline,)
+
+
+def simplify_mesh(mesh, target_faces: int):
+    """Simplify mesh to target number of faces using quadric decimation."""
+    if len(mesh.faces) <= target_faces:
+        return mesh
+
+    try:
+        # Try using trimesh's simplify_quadric_decimation
+        simplified = mesh.simplify_quadric_decimation(target_faces)
+        print(f"[Hunyuan3D-Tex] Simplified mesh: {len(mesh.faces)} -> {len(simplified.faces)} faces")
+        return simplified
+    except Exception as e:
+        print(f"[Hunyuan3D-Tex] Could not simplify mesh: {e}")
+        return mesh
 
 
 class TextureMeshHunyuan:
@@ -385,6 +407,7 @@ class TextureMeshHunyuan:
     Applies textures to a mesh using Hunyuan3D-2 Paint pipeline.
 
     Takes a mesh and reference image, generates UV-mapped textures.
+    Use simplify_mesh option to reduce faces for faster texturing.
     """
 
     CATEGORY = "Hunyuan3D"
@@ -399,6 +422,8 @@ class TextureMeshHunyuan:
                 "texture_model": ("HUNYUAN3D_TEXTURE_MODEL",),
                 "mesh": ("MESH",),
                 "image": ("IMAGE",),
+                "simplify_mesh": ("BOOLEAN", {"default": True}),
+                "target_faces": ("INT", {"default": 50000, "min": 1000, "max": 500000, "step": 1000}),
                 "unload_model": ("BOOLEAN", {"default": True}),
             },
             "optional": {
@@ -411,10 +436,17 @@ class TextureMeshHunyuan:
         texture_model,
         mesh,
         image: torch.Tensor,
+        simplify_mesh: bool,
+        target_faces: int,
         unload_model: bool,
         mask: torch.Tensor = None
     ):
         global _hunyuan3d_texture_model_cache
+
+        # Simplify mesh if enabled
+        if simplify_mesh and len(mesh.faces) > target_faces:
+            print(f"[Hunyuan3D-Tex] Simplifying mesh from {len(mesh.faces)} to ~{target_faces} faces...")
+            mesh = simplify_mesh(mesh, target_faces)
 
         # Free up VRAM
         try:

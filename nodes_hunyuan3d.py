@@ -29,6 +29,100 @@ def get_hunyuan3d_checkpoints():
     return checkpoints
 
 
+def apply_mask_to_image(image_np: np.ndarray, mask_np: np.ndarray) -> np.ndarray:
+    """
+    Apply mask to image, creating RGBA with transparency where mask is black.
+
+    Args:
+        image_np: RGB image array (H, W, 3) float32 [0, 1]
+        mask_np: Mask array (H, W) or (H, W, 1) float32 [0, 1], white = foreground
+
+    Returns:
+        RGBA image array (H, W, 4) uint8 [0, 255]
+    """
+    # Ensure mask is 2D
+    if len(mask_np.shape) == 3:
+        mask_np = mask_np[:, :, 0]
+
+    # Resize mask to match image if needed
+    if mask_np.shape[:2] != image_np.shape[:2]:
+        from PIL import Image as PILImage
+        mask_pil = PILImage.fromarray((mask_np * 255).astype(np.uint8), 'L')
+        mask_pil = mask_pil.resize((image_np.shape[1], image_np.shape[0]), PILImage.Resampling.NEAREST)
+        mask_np = np.array(mask_pil).astype(np.float32) / 255.0
+
+    # Convert to uint8
+    rgb = (image_np * 255).astype(np.uint8)
+    alpha = (mask_np * 255).astype(np.uint8)
+
+    # Create RGBA
+    rgba = np.dstack([rgb, alpha])
+
+    return rgba
+
+
+def project_colors_to_mesh(mesh, image: Image.Image):
+    """
+    Project colors from the input image onto mesh vertices.
+    Simple front-projection based on vertex positions.
+
+    Args:
+        mesh: trimesh object
+        image: PIL Image used for generation
+
+    Returns:
+        mesh with vertex_colors set
+    """
+    import trimesh
+
+    if len(mesh.vertices) == 0:
+        return mesh
+
+    # Get image as numpy array
+    img_np = np.array(image.convert('RGB')).astype(np.float32) / 255.0
+    h, w = img_np.shape[:2]
+
+    # Get vertex positions
+    vertices = mesh.vertices.copy()
+
+    # Normalize vertices to [0, 1] range based on bounding box
+    bounds = mesh.bounds
+    if bounds is not None:
+        min_b, max_b = bounds[0], bounds[1]
+        extent = max_b - min_b
+        extent[extent == 0] = 1  # Avoid division by zero
+
+        # Normalize to [0, 1]
+        normalized = (vertices - min_b) / extent
+
+        # Map X, Y to image coordinates (front view projection)
+        # X -> image width, Y -> image height (inverted)
+        u = np.clip(normalized[:, 0], 0, 1)
+        v = np.clip(1 - normalized[:, 1], 0, 1)  # Flip Y
+
+        # Convert to pixel coordinates
+        px = (u * (w - 1)).astype(int)
+        py = (v * (h - 1)).astype(int)
+
+        # Sample colors from image
+        vertex_colors = img_np[py, px]
+
+        # Add alpha channel (fully opaque)
+        vertex_colors = np.hstack([vertex_colors, np.ones((len(vertex_colors), 1))])
+
+        # Create new mesh with vertex colors
+        colored_mesh = trimesh.Trimesh(
+            vertices=mesh.vertices,
+            faces=mesh.faces,
+            vertex_colors=(vertex_colors * 255).astype(np.uint8)
+        )
+
+        print(f"[Hunyuan3D] Projected colors onto {len(vertices)} vertices")
+        return colored_mesh
+
+    return mesh
+
+
 class LoadHunyuan3DModel:
     """
     Loads the Hunyuan3D-2 model for image-to-3D generation.
@@ -109,7 +203,11 @@ class ImageTo3DMeshHunyuan:
     """
     Converts an input image to a 3D mesh using Hunyuan3D-2.
 
-    For best results, provide an RGBA image with transparent background.
+    Inputs:
+    - image: The source image
+    - mask (optional): White = foreground, Black = background.
+      If provided, creates RGBA image with transparency.
+
     The output mesh is compatible with RenderMesh8Directions node.
     """
 
@@ -127,9 +225,11 @@ class ImageTo3DMeshHunyuan:
                 "num_inference_steps": ("INT", {"default": 30, "min": 10, "max": 100, "step": 5}),
                 "guidance_scale": ("FLOAT", {"default": 5.0, "min": 1.0, "max": 15.0, "step": 0.5}),
                 "octree_resolution": ("INT", {"default": 256, "min": 128, "max": 512, "step": 64}),
+                "project_colors": ("BOOLEAN", {"default": True}),
                 "unload_model": ("BOOLEAN", {"default": True}),
             },
             "optional": {
+                "mask": ("MASK",),
                 "seed": ("INT", {"default": -1, "min": -1, "max": 0xffffffff}),
             }
         }
@@ -141,7 +241,9 @@ class ImageTo3DMeshHunyuan:
         num_inference_steps: int,
         guidance_scale: float,
         octree_resolution: int,
+        project_colors: bool,
         unload_model: bool,
+        mask: torch.Tensor = None,
         seed: int = -1
     ):
         global _hunyuan3d_model_cache
@@ -155,20 +257,37 @@ class ImageTo3DMeshHunyuan:
         except Exception as e:
             print(f"[Hunyuan3D] Could not unload ComfyUI models: {e}")
 
-        # Convert to PIL
-        img_np = image[0].cpu().numpy()
-        img_np = (img_np * 255).astype(np.uint8)
+        # Convert image to numpy
+        img_np = image[0].cpu().numpy()  # (H, W, C) float32 [0, 1]
 
-        if img_np.shape[2] == 4:
-            pil_image = Image.fromarray(img_np, 'RGBA')
+        # If mask provided, apply it to create RGBA
+        if mask is not None:
+            mask_np = mask.cpu().numpy()
+            if len(mask_np.shape) == 3:
+                mask_np = mask_np[0]  # Remove batch dim if present
+
+            print(f"[Hunyuan3D] Applying mask to image")
+            rgba_np = apply_mask_to_image(img_np, mask_np)
+            pil_image = Image.fromarray(rgba_np, 'RGBA')
+            print(f"[Hunyuan3D] Input: RGBA image with mask {pil_image.size}")
+        elif img_np.shape[2] == 4:
+            # Already RGBA
+            pil_image = Image.fromarray((img_np * 255).astype(np.uint8), 'RGBA')
             print(f"[Hunyuan3D] Input: RGBA image {pil_image.size}")
+        else:
+            # RGB without mask - warn user
+            pil_image = Image.fromarray((img_np * 255).astype(np.uint8), 'RGB')
+            print(f"[Hunyuan3D] Input: RGB image {pil_image.size}")
+            print("[Hunyuan3D] WARNING: No mask provided! Background will be included in 3D model.")
+            print("[Hunyuan3D] Connect a MASK input to separate foreground from background.")
 
+        # Store original for color projection
+        original_image = pil_image.copy()
+
+        # Preprocess: resize foreground and convert to RGB
+        if pil_image.mode == 'RGBA':
             pil_image = resize_foreground(pil_image, ratio=0.85)
             pil_image = rgba_to_rgb_gray_background(pil_image)
-        else:
-            pil_image = Image.fromarray(img_np, 'RGB')
-            print(f"[Hunyuan3D] Input: RGB image {pil_image.size}")
-            print("[Hunyuan3D] Warning: For best results, use RGBA image with transparent background")
 
         # Set seed
         generator = None
@@ -196,6 +315,10 @@ class ImageTo3DMeshHunyuan:
             print(f"[Hunyuan3D] Mesh bounds: X=[{verts[:,0].min():.3f}, {verts[:,0].max():.3f}], "
                   f"Y=[{verts[:,1].min():.3f}, {verts[:,1].max():.3f}], "
                   f"Z=[{verts[:,2].min():.3f}, {verts[:,2].max():.3f}]")
+
+            # Project colors from original image
+            if project_colors:
+                mesh = project_colors_to_mesh(mesh, original_image)
 
         if unload_model:
             print("[Hunyuan3D] Unloading model to free VRAM...")

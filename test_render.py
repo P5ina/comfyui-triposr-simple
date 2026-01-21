@@ -231,21 +231,17 @@ def main():
             texture_image.save("/tmp/test_texture.png")
             print("      Saved texture to /tmp/test_texture.png")
 
-            # Bilinear sampling
-            from scipy import ndimage
-            texture_array = np.array(texture_image).astype(np.float32)
-            tex_h, tex_w = texture_array.shape[:2]
+            # Create textured mesh directly (no vertex color conversion)
+            from trimesh.visual import TextureVisuals
+            from trimesh.visual.material import SimpleMaterial
 
-            u = uvs[:, 0] * (tex_w - 1)
-            v = (1 - uvs[:, 1]) * (tex_h - 1)
+            mesh = trimesh.Trimesh(vertices=new_vertices, faces=new_faces)
 
-            vertex_colors = np.zeros((len(uvs), 4), dtype=np.uint8)
-            for c in range(4):
-                sampled = ndimage.map_coordinates(texture_array[:, :, c], [v, u], order=1, mode='nearest')
-                vertex_colors[:, c] = np.clip(sampled, 0, 255).astype(np.uint8)
+            # Create material with texture
+            material = SimpleMaterial(image=texture_image)
+            mesh.visual = TextureVisuals(uv=uvs, material=material, image=texture_image)
 
-            mesh = trimesh.Trimesh(vertices=new_vertices, faces=new_faces, vertex_colors=vertex_colors)
-            print(f"      Mesh with texture baking: {len(mesh.vertices)} verts, {len(mesh.faces)} faces")
+            print(f"      Mesh with texture: {len(mesh.vertices)} verts, {len(mesh.faces)} faces")
 
         except Exception as e:
             print(f"      Texture baking failed: {e}")
@@ -253,80 +249,40 @@ def main():
             meshes = model.extract_mesh(scene_codes, has_vertex_color=True, resolution=resolution)
             mesh = meshes[0]
 
-    # Also test with just vertex colors + color correction
-    print("\n[3b/4] Testing vertex colors with correction...")
-    meshes_vc = model.extract_mesh(scene_codes, has_vertex_color=True, resolution=resolution)
-    mesh_vc = meshes_vc[0]
+    # Transform mesh
+    bounds = mesh.bounds
+    center = (bounds[0] + bounds[1]) / 2
+    mesh.vertices -= center
 
-    # Apply color correction to vertex colors
-    if hasattr(mesh_vc.visual, 'vertex_colors') and mesh_vc.visual.vertex_colors is not None:
-        vc = mesh_vc.visual.vertex_colors.astype(np.float32) / 255.0
-        rgb = vc[:, :3]
+    rot_x = trimesh.transformations.rotation_matrix(-np.pi / 2, [1, 0, 0], point=[0, 0, 0])
+    rot_y = trimesh.transformations.rotation_matrix(-np.pi / 2, [0, 1, 0], point=[0, 0, 0])
+    mesh.apply_transform(rot_x)
+    mesh.apply_transform(rot_y)
 
-        # Auto-levels
-        for c in range(3):
-            c_min, c_max = np.percentile(rgb[:, c], [1, 99])
-            if c_max > c_min:
-                rgb[:, c] = np.clip((rgb[:, c] - c_min) / (c_max - c_min), 0, 1)
+    bounds = mesh.bounds
+    extents = bounds[1] - bounds[0]
+    scale = 1.0 / np.max(extents) * 1.2
+    mesh.vertices *= scale
 
-        # Saturation boost
-        gray = np.mean(rgb, axis=1, keepdims=True)
-        rgb = gray + (rgb - gray) * 1.3
-        rgb = np.clip(rgb, 0, 1)
+    # Export mesh
+    mesh.export("/tmp/test_mesh.glb")
+    print("      Saved mesh to /tmp/test_mesh.glb")
 
-        # Contrast
-        rgb = (rgb - 0.5) * 1.2 + 0.5
-        rgb = np.clip(rgb, 0, 1)
-
-        # Update vertex colors
-        vc[:, :3] = rgb
-        mesh_vc.visual.vertex_colors = (vc * 255).astype(np.uint8)
-        print("      Applied color correction to vertex colors")
-
-    # Helper to transform mesh
-    def transform_mesh(m):
-        bounds = m.bounds
-        center = (bounds[0] + bounds[1]) / 2
-        m.vertices -= center
-
-        rot_x = trimesh.transformations.rotation_matrix(-np.pi / 2, [1, 0, 0], point=[0, 0, 0])
-        rot_y = trimesh.transformations.rotation_matrix(-np.pi / 2, [0, 1, 0], point=[0, 0, 0])
-        m.apply_transform(rot_x)
-        m.apply_transform(rot_y)
-
-        bounds = m.bounds
-        extents = bounds[1] - bounds[0]
-        scale = 1.0 / np.max(extents) * 1.2
-        m.vertices *= scale
-        return m
-
-    # Transform both meshes
-    mesh = transform_mesh(mesh)
-    mesh_vc = transform_mesh(mesh_vc)
-
-    # Export meshes
-    mesh.export("/tmp/test_mesh_textured.glb")
-    mesh_vc.export("/tmp/test_mesh_vertexcolors.glb")
-    print("      Saved meshes to /tmp/test_mesh_*.glb")
-
-    # Render both for comparison
-    print("\n[4/4] Rendering front view (N) for comparison...")
+    # Render
+    print("\n[4/4] Rendering 8 directions...")
     os.makedirs("/tmp/test_renders", exist_ok=True)
+    directions = [("N", 0), ("NE", 45), ("E", 90), ("SE", 135), ("S", 180), ("SW", 225), ("W", 270), ("NW", 315)]
 
-    # Render textured mesh
-    color_tex = render_mesh(mesh, 0, elevation=20.0, distance=1.5, size=512)
-    Image.fromarray(color_tex).save("/tmp/test_renders/N_textured.png")
-    print("      Saved /tmp/test_renders/N_textured.png")
-
-    # Render vertex color mesh
-    color_vc = render_mesh(mesh_vc, 0, elevation=20.0, distance=1.5, size=512)
-    Image.fromarray(color_vc).save("/tmp/test_renders/N_vertexcolors.png")
-    print("      Saved /tmp/test_renders/N_vertexcolors.png")
+    for name, azimuth in directions:
+        print(f"      Rendering {name} ({azimuth}°)...")
+        color = render_mesh(mesh, azimuth, elevation=20.0, distance=1.5, size=512)
+        Image.fromarray(color).save(f"/tmp/test_renders/{name}.png")
 
     print("\n" + "=" * 60)
-    print("Done! Compare:")
-    print("  - /tmp/test_renders/N_textured.png (texture baking)")
-    print("  - /tmp/test_renders/N_vertexcolors.png (vertex colors + correction)")
+    print("Done! Output files:")
+    print("  - /tmp/test_texture.png (baked texture)")
+    print("  - /tmp/test_mesh.glb (3D mesh)")
+    print("  - /tmp/test_renders/*.png (rendered views)")
     print("=" * 60)
 
 

@@ -104,7 +104,7 @@ def create_camera_pose(azimuth_deg, elevation_deg, distance):
     return pose
 
 
-def render_mesh_o3d(mesh, texture_image, uvs, azimuth, elevation=20.0, distance=1.5, size=512):
+def render_mesh_o3d(mesh, texture_image, uvs, azimuth, elevation=20.0, distance=2.0, size=512):
     """Render textured mesh using Open3D."""
     # Create Open3D mesh
     o3d_mesh = o3d.geometry.TriangleMesh()
@@ -118,42 +118,48 @@ def render_mesh_o3d(mesh, texture_image, uvs, azimuth, elevation=20.0, distance=
     if texture_array.shape[2] == 4:
         texture_array = texture_array[:, :, :3]
 
-    # Flip texture vertically for Open3D and make contiguous
-    texture_array = np.ascontiguousarray(np.flipud(texture_array))
+    # Make contiguous (don't flip - Open3D handles UV correctly)
+    texture_array = np.ascontiguousarray(texture_array)
 
     o3d_mesh.textures = [o3d.geometry.Image(texture_array)]
     o3d_mesh.triangle_uvs = o3d.utility.Vector2dVector(uvs[mesh.faces.flatten()])
     o3d_mesh.triangle_material_ids = o3d.utility.IntVector([0] * len(mesh.faces))
 
-    # Set up camera
-    azimuth_rad = np.radians(azimuth)
-    elevation_rad = np.radians(elevation)
-
-    x = distance * np.cos(elevation_rad) * np.sin(azimuth_rad)
-    y = distance * np.sin(elevation_rad)
-    z = distance * np.cos(elevation_rad) * np.cos(azimuth_rad)
-
-    camera_pos = np.array([x, y, z])
-    target = np.array([0, 0, 0])
-    up = np.array([0, 1, 0])
-
     # Create renderer
     renderer = o3d.visualization.rendering.OffscreenRenderer(size, size)
     renderer.scene.set_background([1.0, 1.0, 1.0, 1.0])
 
-    # Add mesh with material
+    # Add mesh with material that uses texture
     mat = o3d.visualization.rendering.MaterialRecord()
-    mat.shader = "defaultLitSSR"  # or "defaultUnlit" for no lighting
+    mat.shader = "defaultLit"
     mat.albedo_img = o3d.geometry.Image(texture_array)
 
     renderer.scene.add_geometry("mesh", o3d_mesh, mat)
 
-    # Set up camera
-    renderer.setup_camera(60.0, [0, 0, 0], camera_pos, up)
+    # Get mesh bounds for camera setup
+    bbox = o3d_mesh.get_axis_aligned_bounding_box()
+    center = bbox.get_center()
+    extent = np.max(bbox.get_extent())
+
+    # Set up camera position
+    azimuth_rad = np.radians(azimuth)
+    elevation_rad = np.radians(elevation)
+
+    cam_distance = extent * distance
+    x = cam_distance * np.cos(elevation_rad) * np.sin(azimuth_rad)
+    y = cam_distance * np.sin(elevation_rad)
+    z = cam_distance * np.cos(elevation_rad) * np.cos(azimuth_rad)
+
+    camera_pos = center + np.array([x, y, z])
+    up = np.array([0, 1, 0])
+
+    # Set up camera looking at center
+    renderer.setup_camera(45.0, center, camera_pos, up)
 
     # Add lighting
-    renderer.scene.scene.set_sun_light([0.5, -1, 0.5], [1, 1, 1], 50000)
+    renderer.scene.scene.set_sun_light([-0.5, -1, -0.5], [1, 1, 1], 75000)
     renderer.scene.scene.enable_sun_light(True)
+    renderer.scene.set_lighting(renderer.scene.LightingProfile.SOFT_SHADOWS, [-0.5, -1, -0.5])
 
     # Render
     img = renderer.render_to_image()

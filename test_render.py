@@ -169,6 +169,8 @@ def main():
         # Try texture baking
         try:
             import moderngl
+            from scipy import ndimage
+
             _orig = moderngl.create_context
             def _egl(*a, **kw):
                 kw.setdefault('backend', 'egl')

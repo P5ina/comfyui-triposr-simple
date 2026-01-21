@@ -389,28 +389,30 @@ class LoadHunyuan3DTextureModel:
 
 def simplify_mesh(mesh, target_faces: int):
     """Simplify mesh to target number of faces using quadric decimation."""
+    import trimesh
+
     if len(mesh.faces) <= target_faces:
         return mesh
 
-    try:
-        # Calculate reduction ratio (0-1, where 0.5 means reduce to 50%)
-        reduction_ratio = target_faces / len(mesh.faces)
+    original_faces = len(mesh.faces)
 
-        # Try using trimesh's simplify_quadric_decimation with ratio
-        simplified = mesh.simplify_quadric_decimation(percent=reduction_ratio)
-        print(f"[Hunyuan3D-Tex] Simplified mesh: {len(mesh.faces)} -> {len(simplified.faces)} faces")
+    try:
+        # Use face_count parameter explicitly
+        simplified = mesh.simplify_quadric_decimation(face_count=target_faces)
+        print(f"[Hunyuan3D-Tex] Simplified mesh: {original_faces} -> {len(simplified.faces)} faces")
         return simplified
-    except TypeError:
-        # Fallback: try with face_count parameter (older trimesh versions)
+    except Exception as e1:
+        print(f"[Hunyuan3D-Tex] simplify_quadric_decimation failed: {e1}")
+
+        # Fallback: try with percent
         try:
-            simplified = mesh.simplify_quadric_decimation(face_count=target_faces)
-            print(f"[Hunyuan3D-Tex] Simplified mesh: {len(mesh.faces)} -> {len(simplified.faces)} faces")
+            ratio = target_faces / original_faces
+            simplified = mesh.simplify_quadric_decimation(percent=ratio)
+            print(f"[Hunyuan3D-Tex] Simplified mesh (percent): {original_faces} -> {len(simplified.faces)} faces")
             return simplified
-        except Exception as e:
-            print(f"[Hunyuan3D-Tex] Could not simplify mesh: {e}")
-            return mesh
-    except Exception as e:
-        print(f"[Hunyuan3D-Tex] Could not simplify mesh: {e}")
+        except Exception as e2:
+            print(f"[Hunyuan3D-Tex] percent fallback failed: {e2}")
+
         return mesh
 
 

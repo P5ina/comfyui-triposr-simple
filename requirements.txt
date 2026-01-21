@@ -1,7 +1,7 @@
-# ComfyUI TripoSR Simple - Dependencies
+# ComfyUI 3D Sprite Generator - Dependencies
 # Note: torch, torchvision should already be installed via ComfyUI
 
-# TripoSR dependencies
+# Common dependencies
 transformers>=4.35.0
 huggingface_hub>=0.20.0
 omegaconf>=2.3.0
@@ -30,3 +30,11 @@ scikit-learn>=1.0.0
 # For headless rendering (EGL/OSMesa)
 # On Ubuntu: apt-get install libosmesa6-dev libegl1-mesa-dev freeglut3-dev
 # Set environment: export PYOPENGL_PLATFORM=egl (or osmesa)
+
+# ============================================================================
+# Hunyuan3D dependencies (optional - for Hunyuan3D nodes)
+# ============================================================================
+# pip install diffusers>=0.31.0 accelerate
+# pip install git+https://github.com/Tencent/Hunyuan3D-2.git
+#
+# Or install hy3dgen package separately if available

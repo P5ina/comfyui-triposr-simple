@@ -36,14 +36,31 @@ def apply_mask_to_image(image_np: np.ndarray, mask_np: np.ndarray) -> np.ndarray
 
     Args:
         image_np: RGB image array (H, W, 3) float32 [0, 1]
-        mask_np: Mask array (H, W) or (H, W, 1) float32 [0, 1], white = foreground
+        mask_np: Mask array (H, W) or (H, W, 1) or (B, H, W) float32 [0, 1], white = foreground
 
     Returns:
         RGBA image array (H, W, 4) uint8 [0, 255]
     """
-    # Ensure mask is 2D
+    print(f"[Hunyuan3D] apply_mask_to_image: image shape={image_np.shape}, mask shape={mask_np.shape}")
+
+    # Handle different mask shapes
     if len(mask_np.shape) == 3:
-        mask_np = mask_np[:, :, 0]
+        if mask_np.shape[0] == 1:
+            # (1, H, W) -> (H, W)
+            mask_np = mask_np[0]
+        elif mask_np.shape[2] == 1:
+            # (H, W, 1) -> (H, W)
+            mask_np = mask_np[:, :, 0]
+        else:
+            # (H, W, C) -> take first channel
+            mask_np = mask_np[:, :, 0]
+
+    # Ensure image is 3 channels
+    if len(image_np.shape) == 3 and image_np.shape[2] == 4:
+        # RGBA -> RGB
+        image_np = image_np[:, :, :3]
+
+    print(f"[Hunyuan3D] After processing: image shape={image_np.shape}, mask shape={mask_np.shape}")
 
     # Resize mask to match image if needed
     if mask_np.shape[:2] != image_np.shape[:2]:
@@ -51,13 +68,23 @@ def apply_mask_to_image(image_np: np.ndarray, mask_np: np.ndarray) -> np.ndarray
         mask_pil = PILImage.fromarray((mask_np * 255).astype(np.uint8), 'L')
         mask_pil = mask_pil.resize((image_np.shape[1], image_np.shape[0]), PILImage.Resampling.NEAREST)
         mask_np = np.array(mask_pil).astype(np.float32) / 255.0
+        print(f"[Hunyuan3D] Resized mask to {mask_np.shape}")
 
     # Convert to uint8
     rgb = (image_np * 255).astype(np.uint8)
     alpha = (mask_np * 255).astype(np.uint8)
 
+    # Ensure rgb is (H, W, 3)
+    if len(rgb.shape) == 2:
+        rgb = np.stack([rgb, rgb, rgb], axis=-1)
+
+    # Ensure alpha is (H, W)
+    if len(alpha.shape) == 3:
+        alpha = alpha[:, :, 0]
+
     # Create RGBA
     rgba = np.dstack([rgb, alpha])
+    print(f"[Hunyuan3D] Final RGBA shape={rgba.shape}")
 
     return rgba
 
@@ -264,10 +291,19 @@ class ImageTo3DMeshHunyuan:
         # If mask provided, apply it to create RGBA
         if mask is not None:
             mask_np = mask.cpu().numpy()
-            if len(mask_np.shape) == 3:
-                mask_np = mask_np[0]  # Remove batch dim if present
+            print(f"[Hunyuan3D] Raw mask shape: {mask_np.shape}")
 
-            print(f"[Hunyuan3D] Applying mask to image")
+            # Handle ComfyUI mask format (can be various shapes)
+            if len(mask_np.shape) == 4:
+                # (B, C, H, W) or (B, H, W, C)
+                mask_np = mask_np[0]
+            if len(mask_np.shape) == 3:
+                if mask_np.shape[0] == 1:
+                    mask_np = mask_np[0]  # (1, H, W) -> (H, W)
+                elif mask_np.shape[2] == 1:
+                    mask_np = mask_np[:, :, 0]  # (H, W, 1) -> (H, W)
+
+            print(f"[Hunyuan3D] Applying mask to image, mask shape: {mask_np.shape}")
             rgba_np = apply_mask_to_image(img_np, mask_np)
             pil_image = Image.fromarray(rgba_np, 'RGBA')
             print(f"[Hunyuan3D] Input: RGBA image with mask {pil_image.size}")

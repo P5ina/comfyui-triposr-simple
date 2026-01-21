@@ -67,6 +67,16 @@ model.to("cuda:0")
 print("Loading image...")
 image = Image.open("TripoSR/examples/chair.png")
 
+# Convert RGBA to RGB with white background
+if image.mode == 'RGBA':
+    background = Image.new('RGB', image.size, (255, 255, 255))
+    background.paste(image, mask=image.split()[3])
+    image = background
+    print(f"Converted RGBA to RGB, size: {image.size}")
+elif image.mode != 'RGB':
+    image = image.convert('RGB')
+    print(f"Converted {image.mode} to RGB")
+
 print("Running inference...")
 with torch.no_grad():
     scene_codes = model([image], device="cuda:0")

@@ -61,7 +61,7 @@ def _patch_rembg():
     sys.modules['rembg'] = fake_rembg
 
 def _patch_torchmcubes():
-    """Create a fake torchmcubes module using scikit-image marching cubes."""
+    """Create a fake torchmcubes module using mcubes or scikit-image."""
     try:
         import torchmcubes
         print("[TripoSR] torchmcubes found and available")
@@ -69,52 +69,73 @@ def _patch_torchmcubes():
     except ImportError:
         pass
 
-    print("[TripoSR] torchmcubes not found, using scikit-image marching cubes fallback")
+    # Try PyMCubes first (closer to torchmcubes behavior)
+    try:
+        import mcubes
+        print("[TripoSR] Using PyMCubes as torchmcubes fallback")
 
+        def marching_cubes(volume, threshold):
+            device = volume.device if isinstance(volume, torch.Tensor) else torch.device('cpu')
+
+            if isinstance(volume, torch.Tensor):
+                vol_np = volume.detach().cpu().numpy()
+            else:
+                vol_np = np.array(volume)
+
+            print(f"[TripoSR] mcubes input: shape={vol_np.shape}, min={vol_np.min():.4f}, max={vol_np.max():.4f}, threshold={threshold}")
+
+            # PyMCubes marching_cubes
+            verts, faces = mcubes.marching_cubes(vol_np, threshold)
+
+            print(f"[TripoSR] mcubes output: {len(verts)} vertices, {len(faces)} faces")
+            if len(verts) > 0:
+                print(f"[TripoSR] Vertex bounds: X=[{verts[:,0].min():.2f}, {verts[:,0].max():.2f}], Y=[{verts[:,1].min():.2f}, {verts[:,1].max():.2f}], Z=[{verts[:,2].min():.2f}, {verts[:,2].max():.2f}]")
+
+            verts_tensor = torch.from_numpy(verts.astype(np.float32)).to(device)
+            faces_tensor = torch.from_numpy(faces.astype(np.int64)).to(device)
+
+            return verts_tensor, faces_tensor
+
+        fake_module = types.ModuleType('torchmcubes')
+        fake_module.marching_cubes = marching_cubes
+        sys.modules['torchmcubes'] = fake_module
+        return
+
+    except ImportError:
+        pass
+
+    # Fallback to scikit-image
+    print("[TripoSR] Using scikit-image marching cubes as torchmcubes fallback")
     from skimage import measure
 
     def marching_cubes(volume, threshold):
-        """
-        Scikit-image based marching cubes implementation.
-        Returns vertices and faces as torch tensors matching torchmcubes format.
-        """
-        # Get device for output tensors
         device = volume.device if isinstance(volume, torch.Tensor) else torch.device('cpu')
 
-        # Convert to numpy if needed
         if isinstance(volume, torch.Tensor):
             vol_np = volume.detach().cpu().numpy()
         else:
             vol_np = np.array(volume)
 
-        # Ensure 3D
         if vol_np.ndim != 3:
             raise ValueError(f"Expected 3D volume, got shape {vol_np.shape}")
 
-        print(f"[TripoSR] Marching cubes input: shape={vol_np.shape}, min={vol_np.min():.4f}, max={vol_np.max():.4f}, threshold={threshold}")
+        print(f"[TripoSR] skimage input: shape={vol_np.shape}, min={vol_np.min():.4f}, max={vol_np.max():.4f}, threshold={threshold}")
 
-        # Run marching cubes
         try:
-            verts, faces, normals, values = measure.marching_cubes(
-                vol_np,
-                level=threshold,
-                method='lewiner'
-            )
+            verts, faces, normals, values = measure.marching_cubes(vol_np, level=threshold)
         except Exception as e:
             print(f"[TripoSR] Marching cubes failed: {e}")
-            # Return empty mesh
             return torch.zeros((0, 3), device=device), torch.zeros((0, 3), dtype=torch.long, device=device)
 
-        print(f"[TripoSR] Marching cubes output: {len(verts)} vertices, {len(faces)} faces")
-        print(f"[TripoSR] Vertex bounds: X=[{verts[:,0].min():.2f}, {verts[:,0].max():.2f}], Y=[{verts[:,1].min():.2f}, {verts[:,1].max():.2f}], Z=[{verts[:,2].min():.2f}, {verts[:,2].max():.2f}]")
+        print(f"[TripoSR] skimage output: {len(verts)} vertices, {len(faces)} faces")
+        if len(verts) > 0:
+            print(f"[TripoSR] Vertex bounds: X=[{verts[:,0].min():.2f}, {verts[:,0].max():.2f}], Y=[{verts[:,1].min():.2f}, {verts[:,1].max():.2f}], Z=[{verts[:,2].min():.2f}, {verts[:,2].max():.2f}]")
 
-        # Convert to torch tensors on the same device
-        verts_tensor = torch.from_numpy(verts.copy()).float().to(device)
-        faces_tensor = torch.from_numpy(faces.copy()).long().to(device)
+        verts_tensor = torch.from_numpy(verts.copy().astype(np.float32)).to(device)
+        faces_tensor = torch.from_numpy(faces.copy().astype(np.int64)).to(device)
 
         return verts_tensor, faces_tensor
 
-    # Create fake module
     fake_module = types.ModuleType('torchmcubes')
     fake_module.marching_cubes = marching_cubes
     sys.modules['torchmcubes'] = fake_module

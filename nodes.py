@@ -317,11 +317,12 @@ class ImageTo3DMesh:
                 "image": ("IMAGE",),
                 "resolution": ("INT", {"default": 256, "min": 64, "max": 512, "step": 32}),
                 "unload_model": ("BOOLEAN", {"default": True}),
-                "color_boost": ("FLOAT", {"default": 1.2, "min": 0.5, "max": 3.0, "step": 0.1}),
+                "use_texture": ("BOOLEAN", {"default": True}),
+                "texture_resolution": ("INT", {"default": 1024, "min": 512, "max": 2048, "step": 256}),
             }
         }
 
-    def generate(self, model, image: torch.Tensor, resolution: int, unload_model: bool, color_boost: float):
+    def generate(self, model, image: torch.Tensor, resolution: int, unload_model: bool, use_texture: bool, texture_resolution: int):
         global _triposr_model_cache
 
         # Free up VRAM by unloading ComfyUI models (Flux, etc.) before TripoSR inference
@@ -369,33 +370,68 @@ class ImageTo3DMesh:
         # Run TripoSR inference
         with torch.no_grad():
             scene_codes = model([pil_image], device=device)
-            meshes = model.extract_mesh(
-                scene_codes,
-                has_vertex_color=True,
-                resolution=resolution
-            )
 
-        mesh = meshes[0]
+            if use_texture:
+                # Use texture baking for better color accuracy
+                print(f"[TripoSR] Using texture baking at {texture_resolution}x{texture_resolution}...")
+                # Extract mesh without vertex colors first
+                meshes = model.extract_mesh(
+                    scene_codes,
+                    has_vertex_color=False,
+                    resolution=resolution
+                )
+                mesh = meshes[0]
+
+                # Bake texture
+                try:
+                    from tsr.bake_texture import bake_texture
+                    import xatlas
+
+                    print("[TripoSR] Baking texture...")
+                    bake_output = bake_texture(mesh, model, scene_codes[0], texture_resolution)
+
+                    # Create new mesh with UV coordinates
+                    new_vertices = mesh.vertices[bake_output["vmapping"]]
+                    new_faces = bake_output["indices"]
+                    uvs = bake_output["uvs"]
+
+                    # Convert colors to uint8 image
+                    texture_colors = (bake_output["colors"] * 255.0).astype(np.uint8)
+                    # Flip texture vertically (UV convention)
+                    texture_image = Image.fromarray(texture_colors).transpose(Image.FLIP_TOP_BOTTOM)
+
+                    # Create textured mesh
+                    mesh = trimesh.Trimesh(
+                        vertices=new_vertices,
+                        faces=new_faces,
+                    )
+
+                    # Apply texture using trimesh's TextureVisuals
+                    from trimesh.visual.texture import TextureVisuals
+                    from trimesh.visual.material import SimpleMaterial
+
+                    material = SimpleMaterial(image=texture_image)
+                    mesh.visual = TextureVisuals(uv=uvs, image=texture_image, material=material)
+
+                    print(f"[TripoSR] Texture baked successfully: {texture_resolution}x{texture_resolution}")
+                except Exception as e:
+                    print(f"[TripoSR] Texture baking failed: {e}, falling back to vertex colors")
+                    meshes = model.extract_mesh(
+                        scene_codes,
+                        has_vertex_color=True,
+                        resolution=resolution
+                    )
+                    mesh = meshes[0]
+            else:
+                # Use vertex colors (faster but less accurate colors)
+                meshes = model.extract_mesh(
+                    scene_codes,
+                    has_vertex_color=True,
+                    resolution=resolution
+                )
+                mesh = meshes[0]
+
         print(f"[TripoSR] Mesh generated: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
-
-        # Boost vertex colors to compensate for washed out TripoSR output
-        if color_boost != 1.0 and mesh.visual.vertex_colors is not None:
-            colors = mesh.visual.vertex_colors.astype(np.float32)
-            # Separate RGB and alpha
-            rgb = colors[:, :3] / 255.0
-            alpha = colors[:, 3:4] / 255.0
-
-            # Apply saturation boost: increase distance from gray
-            gray = np.mean(rgb, axis=1, keepdims=True)
-            rgb_boosted = gray + (rgb - gray) * color_boost
-
-            # Also apply slight gamma correction to brighten midtones
-            rgb_boosted = np.power(np.clip(rgb_boosted, 0, 1), 0.9)
-
-            # Recombine and convert back to uint8
-            colors_boosted = np.concatenate([rgb_boosted * 255, alpha * 255], axis=1).astype(np.uint8)
-            mesh.visual.vertex_colors = colors_boosted
-            print(f"[TripoSR] Applied color boost: {color_boost}x saturation")
 
         # Log mesh bounds for debugging
         if len(mesh.vertices) > 0:

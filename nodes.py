@@ -317,12 +317,10 @@ class ImageTo3DMesh:
                 "image": ("IMAGE",),
                 "resolution": ("INT", {"default": 256, "min": 64, "max": 512, "step": 32}),
                 "unload_model": ("BOOLEAN", {"default": True}),
-                "use_texture": ("BOOLEAN", {"default": True}),
-                "texture_resolution": ("INT", {"default": 1024, "min": 512, "max": 2048, "step": 256}),
             }
         }
 
-    def generate(self, model, image: torch.Tensor, resolution: int, unload_model: bool, use_texture: bool, texture_resolution: int):
+    def generate(self, model, image: torch.Tensor, resolution: int, unload_model: bool):
         global _triposr_model_cache
 
         # Free up VRAM by unloading ComfyUI models (Flux, etc.) before TripoSR inference
@@ -371,141 +369,41 @@ class ImageTo3DMesh:
         with torch.no_grad():
             scene_codes = model([pil_image], device=device)
 
-            if use_texture:
-                # Use texture baking for better color accuracy
-                print(f"[TripoSR] Using texture baking at {texture_resolution}x{texture_resolution}...")
-                # Extract mesh without vertex colors first
-                meshes = model.extract_mesh(
-                    scene_codes,
-                    has_vertex_color=False,
-                    resolution=resolution
-                )
-                mesh = meshes[0]
+            # Extract mesh with vertex colors
+            meshes = model.extract_mesh(
+                scene_codes,
+                has_vertex_color=True,
+                resolution=resolution
+            )
+            mesh = meshes[0]
 
-                # Bake texture
-                try:
-                    # Set up headless OpenGL for moderngl (required for texture baking)
-                    import os
-                    os.environ["PYOPENGL_PLATFORM"] = "egl"
+            # Apply color correction to vertex colors to fix washed out TripoSR colors
+            if hasattr(mesh.visual, 'vertex_colors') and mesh.visual.vertex_colors is not None:
+                print("[TripoSR] Applying color correction to vertex colors...")
+                vc = mesh.visual.vertex_colors.astype(np.float32) / 255.0
+                rgb = vc[:, :3]
 
-                    # Patch moderngl to use EGL backend
-                    import moderngl
-                    _original_create_context = moderngl.create_context
-                    def _create_context_egl(*args, **kwargs):
-                        kwargs.setdefault('backend', 'egl')
-                        return _original_create_context(*args, **kwargs)
-                    moderngl.create_context = _create_context_egl
+                # 1. Auto-levels: stretch RGB range to use full 0-1 range
+                for c in range(3):
+                    c_min, c_max = np.percentile(rgb[:, c], [1, 99])
+                    if c_max > c_min:
+                        rgb[:, c] = np.clip((rgb[:, c] - c_min) / (c_max - c_min), 0, 1)
 
-                    from tsr.bake_texture import bake_texture
-                    import xatlas
+                # 2. Boost saturation
+                gray = np.mean(rgb, axis=1, keepdims=True)
+                saturation_boost = 1.3
+                rgb = gray + (rgb - gray) * saturation_boost
+                rgb = np.clip(rgb, 0, 1)
 
-                    print("[TripoSR] Baking texture (using EGL backend)...")
-                    bake_output = bake_texture(mesh, model, scene_codes[0], texture_resolution)
+                # 3. Increase contrast
+                contrast = 1.2
+                rgb = (rgb - 0.5) * contrast + 0.5
+                rgb = np.clip(rgb, 0, 1)
 
-                    # Create new mesh with UV coordinates
-                    new_vertices = mesh.vertices[bake_output["vmapping"]]
-                    new_faces = bake_output["indices"]
-                    uvs = bake_output["uvs"]
-
-                    # Convert colors to float for processing
-                    texture_colors = bake_output["colors"].copy()  # RGBA float [0,1]
-
-                    # Apply color correction to fix washed out TripoSR colors
-                    rgb = texture_colors[:, :, :3]
-                    alpha = texture_colors[:, :, 3:4]
-
-                    # Only process non-transparent pixels
-                    mask = alpha[:, :, 0] > 0.01
-
-                    if mask.any():
-                        # 1. Auto-levels: stretch RGB range to use full 0-1 range
-                        rgb_masked = rgb[mask]
-                        for c in range(3):
-                            channel = rgb_masked[:, c]
-                            c_min, c_max = np.percentile(channel, [1, 99])
-                            if c_max > c_min:
-                                rgb[:, :, c] = np.clip((rgb[:, :, c] - c_min) / (c_max - c_min), 0, 1)
-
-                        # 2. Boost saturation
-                        gray = np.mean(rgb, axis=2, keepdims=True)
-                        saturation_boost = 1.3
-                        rgb = gray + (rgb - gray) * saturation_boost
-                        rgb = np.clip(rgb, 0, 1)
-
-                        # 3. Increase contrast (S-curve)
-                        contrast = 1.2
-                        rgb = (rgb - 0.5) * contrast + 0.5
-                        rgb = np.clip(rgb, 0, 1)
-
-                    # Recombine
-                    texture_colors = np.concatenate([rgb, alpha], axis=2)
-                    texture_colors = (texture_colors * 255.0).astype(np.uint8)
-
-                    # Inpaint texture to fill background - prevents edge artifacts from bilinear sampling
-                    try:
-                        import cv2
-                        # Create inpaint mask (255 = pixels to inpaint)
-                        inpaint_mask = (alpha[:, :, 0] < 0.01).astype(np.uint8) * 255
-
-                        # Inpaint RGB channels
-                        rgb_uint8 = texture_colors[:, :, :3]
-                        inpainted = cv2.inpaint(rgb_uint8, inpaint_mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
-                        texture_colors[:, :, :3] = inpainted
-                        print("[TripoSR] Inpainted texture background with cv2")
-                    except ImportError:
-                        print("[TripoSR] cv2 not available, skipping texture inpainting")
-
-                    # Flip texture vertically (UV convention)
-                    texture_image = Image.fromarray(texture_colors).transpose(Image.FLIP_TOP_BOTTOM)
-                    print("[TripoSR] Applied color correction and dilation to texture")
-
-                    # Sample texture to vertex colors using bilinear interpolation
-                    # This avoids artifacts from nearest-neighbor sampling
-                    from scipy import ndimage
-
-                    texture_array = np.array(texture_image).astype(np.float32)
-                    tex_h, tex_w = texture_array.shape[:2]
-
-                    # Convert UV to pixel coordinates
-                    # UV origin is bottom-left, image origin is top-left
-                    u = uvs[:, 0] * (tex_w - 1)
-                    v = (1 - uvs[:, 1]) * (tex_h - 1)
-
-                    # Sample each channel with bilinear interpolation
-                    vertex_colors = np.zeros((len(uvs), 4), dtype=np.uint8)
-                    for c in range(4):
-                        sampled = ndimage.map_coordinates(
-                            texture_array[:, :, c],
-                            [v, u],
-                            order=1,  # Bilinear interpolation
-                            mode='nearest'
-                        )
-                        vertex_colors[:, c] = np.clip(sampled, 0, 255).astype(np.uint8)
-
-                    # Create mesh with vertex colors
-                    mesh = trimesh.Trimesh(
-                        vertices=new_vertices,
-                        faces=new_faces,
-                        vertex_colors=vertex_colors,
-                    )
-
-                    print(f"[TripoSR] Texture baked and converted to vertex colors: {texture_resolution}x{texture_resolution}")
-                except Exception as e:
-                    print(f"[TripoSR] Texture baking failed: {e}, falling back to vertex colors")
-                    meshes = model.extract_mesh(
-                        scene_codes,
-                        has_vertex_color=True,
-                        resolution=resolution
-                    )
-                    mesh = meshes[0]
-            else:
-                # Use vertex colors (faster but less accurate colors)
-                meshes = model.extract_mesh(
-                    scene_codes,
-                    has_vertex_color=True,
-                    resolution=resolution
-                )
-                mesh = meshes[0]
+                # Update vertex colors
+                vc[:, :3] = rgb
+                mesh.visual.vertex_colors = (vc * 255).astype(np.uint8)
+                print("[TripoSR] Color correction applied!")
 
         print(f"[TripoSR] Mesh generated: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
 

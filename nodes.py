@@ -472,7 +472,7 @@ class RenderMesh8Directions:
                 "elevation": ("FLOAT", {"default": 20.0, "min": -90.0, "max": 90.0, "step": 5.0}),
                 "distance": ("FLOAT", {"default": 1.5, "min": 0.5, "max": 10.0, "step": 0.1}),
                 "background_color": (["white", "black", "transparent"],),
-                "auto_align": ("BOOLEAN", {"default": True}),
+                "auto_align": ("BOOLEAN", {"default": False}),
                 "mesh_pitch": ("FLOAT", {"default": 0.0, "min": -45.0, "max": 45.0, "step": 1.0}),
                 "mesh_roll": ("FLOAT", {"default": 0.0, "min": -45.0, "max": 45.0, "step": 1.0}),
             }

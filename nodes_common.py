@@ -78,15 +78,15 @@ def resize_foreground(image: Image.Image, ratio: float = 0.85) -> Image.Image:
     return Image.fromarray(new_image)
 
 
-def rgba_to_rgb_gray_background(image: Image.Image) -> Image.Image:
+def rgba_to_rgb_white_background(image: Image.Image) -> Image.Image:
     """
-    Convert RGBA to RGB by compositing with gray (0.5) background.
+    Convert RGBA to RGB by compositing with white background.
 
     Args:
         image: PIL Image in RGBA mode
 
     Returns:
-        RGB image with gray background where transparency was
+        RGB image with white background where transparency was
     """
     image_np = np.array(image).astype(np.float32) / 255.0
 
@@ -96,11 +96,15 @@ def rgba_to_rgb_gray_background(image: Image.Image) -> Image.Image:
     rgb = image_np[:, :, :3]
     alpha = image_np[:, :, 3:4]
 
-    # Composite with 0.5 gray background
-    composited = rgb * alpha + (1 - alpha) * 0.5
+    # Composite with white (1.0) background - required by Hunyuan3D
+    composited = rgb * alpha + (1 - alpha) * 1.0
 
     result = (composited * 255.0).astype(np.uint8)
     return Image.fromarray(result, 'RGB')
+
+
+# Keep alias for backwards compatibility
+rgba_to_rgb_gray_background = rgba_to_rgb_white_background
 
 
 class RenderMesh8Directions:

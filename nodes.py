@@ -472,6 +472,8 @@ class RenderMesh8Directions:
                 "elevation": ("FLOAT", {"default": 20.0, "min": -90.0, "max": 90.0, "step": 5.0}),
                 "distance": ("FLOAT", {"default": 1.5, "min": 0.5, "max": 10.0, "step": 0.1}),
                 "background_color": (["white", "black", "transparent"],),
+                "mesh_pitch": ("FLOAT", {"default": 0.0, "min": -45.0, "max": 45.0, "step": 1.0}),
+                "mesh_roll": ("FLOAT", {"default": 0.0, "min": -45.0, "max": 45.0, "step": 1.0}),
             }
         }
 
@@ -563,7 +565,9 @@ class RenderMesh8Directions:
         render_size: int,
         elevation: float,
         distance: float,
-        background_color: str
+        background_color: str,
+        mesh_pitch: float,
+        mesh_roll: float
     ):
         # Set background color
         bg_colors = {
@@ -590,6 +594,18 @@ class RenderMesh8Directions:
         )
         mesh_centered.apply_transform(rot_x)
         mesh_centered.apply_transform(rot_y)
+
+        # Apply user pitch/roll correction to fix tilt from source image perspective
+        if mesh_pitch != 0.0:
+            rot_pitch = trimesh.transformations.rotation_matrix(
+                np.radians(mesh_pitch), [1, 0, 0], point=[0, 0, 0]
+            )
+            mesh_centered.apply_transform(rot_pitch)
+        if mesh_roll != 0.0:
+            rot_roll = trimesh.transformations.rotation_matrix(
+                np.radians(mesh_roll), [0, 0, 1], point=[0, 0, 0]
+            )
+            mesh_centered.apply_transform(rot_roll)
 
         # Scale to fit in unit cube, larger factor = fills more of frame
         bounds = mesh_centered.bounds  # Recalculate after rotation

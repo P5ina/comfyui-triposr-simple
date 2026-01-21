@@ -452,15 +452,16 @@ class RenderMesh8Directions:
     FUNCTION = "render"
 
     # Direction angles (azimuth in degrees, clockwise from front)
+    # Offset by -90 to correct for mesh orientation
     DIRECTIONS = [
-        ("N", 0),      # Front
-        ("NE", 45),    # Front-right
-        ("E", 90),     # Right
-        ("SE", 135),   # Back-right
-        ("S", 180),    # Back
-        ("SW", 225),   # Back-left
-        ("W", 270),    # Left
-        ("NW", 315),   # Front-left
+        ("N", -90),    # Front
+        ("NE", -45),   # Front-right
+        ("E", 0),      # Right
+        ("SE", 45),    # Back-right
+        ("S", 90),     # Back
+        ("SW", 135),   # Back-left
+        ("W", 180),    # Left
+        ("NW", 225),   # Front-left
     ]
 
     @classmethod

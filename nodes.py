@@ -439,32 +439,21 @@ class ImageTo3DMesh:
 
                     # Recombine
                     texture_colors = np.concatenate([rgb, alpha], axis=2)
-
-                    # Dilate texture to fill background - prevents edge artifacts from bilinear sampling
-                    # This extends valid colors into the noisy background regions
-                    from scipy import ndimage
-
-                    valid_mask = alpha[:, :, 0] > 0.01
-                    dilated_rgb = texture_colors[:, :, :3].copy()
-
-                    # Iteratively dilate until background is filled
-                    for _ in range(32):  # 32 iterations should cover most gaps
-                        invalid_mask = ~valid_mask
-                        if not invalid_mask.any():
-                            break
-
-                        # For each invalid pixel, take average of valid neighbors
-                        for c in range(3):
-                            channel = dilated_rgb[:, :, c]
-                            # Dilate by taking max of neighbors (simple approach)
-                            dilated = ndimage.maximum_filter(channel * valid_mask, size=3)
-                            dilated_rgb[:, :, c] = np.where(invalid_mask, dilated, channel)
-
-                        # Update valid mask with newly filled pixels
-                        valid_mask = valid_mask | (ndimage.maximum_filter(valid_mask.astype(float), size=3) > 0)
-
-                    texture_colors[:, :, :3] = dilated_rgb
                     texture_colors = (texture_colors * 255.0).astype(np.uint8)
+
+                    # Inpaint texture to fill background - prevents edge artifacts from bilinear sampling
+                    try:
+                        import cv2
+                        # Create inpaint mask (255 = pixels to inpaint)
+                        inpaint_mask = (alpha[:, :, 0] < 0.01).astype(np.uint8) * 255
+
+                        # Inpaint RGB channels
+                        rgb_uint8 = texture_colors[:, :, :3]
+                        inpainted = cv2.inpaint(rgb_uint8, inpaint_mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
+                        texture_colors[:, :, :3] = inpainted
+                        print("[TripoSR] Inpainted texture background with cv2")
+                    except ImportError:
+                        print("[TripoSR] cv2 not available, skipping texture inpainting")
 
                     # Flip texture vertically (UV convention)
                     texture_image = Image.fromarray(texture_colors).transpose(Image.FLIP_TOP_BOTTOM)

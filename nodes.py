@@ -382,10 +382,13 @@ class ImageTo3DMesh:
                 "model": ("TRIPOSR_MODEL",),
                 "image": ("IMAGE",),
                 "resolution": ("INT", {"default": 256, "min": 64, "max": 512, "step": 32}),
+                "unload_model": ("BOOLEAN", {"default": True}),
             }
         }
 
-    def generate(self, model, image: torch.Tensor, resolution: int):
+    def generate(self, model, image: torch.Tensor, resolution: int, unload_model: bool):
+        global _triposr_model_cache
+
         # Convert ComfyUI IMAGE tensor (B, H, W, C) to PIL Image
         # ComfyUI images are float32 [0, 1]
         img_np = image[0].cpu().numpy()
@@ -436,6 +439,15 @@ class ImageTo3DMesh:
             print(f"[TripoSR] Mesh bounds: X=[{verts[:,0].min():.3f}, {verts[:,0].max():.3f}], "
                   f"Y=[{verts[:,1].min():.3f}, {verts[:,1].max():.3f}], "
                   f"Z=[{verts[:,2].min():.3f}, {verts[:,2].max():.3f}]")
+
+        # Unload model to free VRAM for other models (e.g., Flux)
+        if unload_model:
+            print("[TripoSR] Unloading model to free VRAM...")
+            model.to("cpu")
+            _triposr_model_cache.clear()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            print("[TripoSR] Model unloaded, VRAM freed")
 
         return (mesh,)
 

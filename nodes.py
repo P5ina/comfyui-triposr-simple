@@ -439,11 +439,36 @@ class ImageTo3DMesh:
 
                     # Recombine
                     texture_colors = np.concatenate([rgb, alpha], axis=2)
+
+                    # Dilate texture to fill background - prevents edge artifacts from bilinear sampling
+                    # This extends valid colors into the noisy background regions
+                    from scipy import ndimage
+
+                    valid_mask = alpha[:, :, 0] > 0.01
+                    dilated_rgb = texture_colors[:, :, :3].copy()
+
+                    # Iteratively dilate until background is filled
+                    for _ in range(32):  # 32 iterations should cover most gaps
+                        invalid_mask = ~valid_mask
+                        if not invalid_mask.any():
+                            break
+
+                        # For each invalid pixel, take average of valid neighbors
+                        for c in range(3):
+                            channel = dilated_rgb[:, :, c]
+                            # Dilate by taking max of neighbors (simple approach)
+                            dilated = ndimage.maximum_filter(channel * valid_mask, size=3)
+                            dilated_rgb[:, :, c] = np.where(invalid_mask, dilated, channel)
+
+                        # Update valid mask with newly filled pixels
+                        valid_mask = valid_mask | (ndimage.maximum_filter(valid_mask.astype(float), size=3) > 0)
+
+                    texture_colors[:, :, :3] = dilated_rgb
                     texture_colors = (texture_colors * 255.0).astype(np.uint8)
 
                     # Flip texture vertically (UV convention)
                     texture_image = Image.fromarray(texture_colors).transpose(Image.FLIP_TOP_BOTTOM)
-                    print("[TripoSR] Applied color correction to texture")
+                    print("[TripoSR] Applied color correction and dilation to texture")
 
                     # Sample texture to vertex colors using bilinear interpolation
                     # This avoids artifacts from nearest-neighbor sampling

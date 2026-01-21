@@ -209,7 +209,23 @@ def main():
                 rgb = (rgb - 0.5) * 1.2 + 0.5
                 rgb = np.clip(rgb, 0, 1)
 
+            # Dilate texture to fill background - prevents edge artifacts
             texture_colors = np.concatenate([rgb, alpha], axis=2)
+            valid_mask = alpha[:, :, 0] > 0.01
+            dilated_rgb = texture_colors[:, :, :3].copy()
+
+            print("      Dilating texture to fill background...")
+            for _ in range(32):
+                invalid_mask = ~valid_mask
+                if not invalid_mask.any():
+                    break
+                for c in range(3):
+                    channel = dilated_rgb[:, :, c]
+                    dilated = ndimage.maximum_filter(channel * valid_mask, size=3)
+                    dilated_rgb[:, :, c] = np.where(invalid_mask, dilated, channel)
+                valid_mask = valid_mask | (ndimage.maximum_filter(valid_mask.astype(float), size=3) > 0)
+
+            texture_colors[:, :, :3] = dilated_rgb
             texture_colors = (texture_colors * 255.0).astype(np.uint8)
             texture_image = Image.fromarray(texture_colors).transpose(Image.FLIP_TOP_BOTTOM)
 

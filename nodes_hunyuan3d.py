@@ -393,10 +393,22 @@ def simplify_mesh(mesh, target_faces: int):
         return mesh
 
     try:
-        # Try using trimesh's simplify_quadric_decimation
-        simplified = mesh.simplify_quadric_decimation(target_faces)
+        # Calculate reduction ratio (0-1, where 0.5 means reduce to 50%)
+        reduction_ratio = target_faces / len(mesh.faces)
+
+        # Try using trimesh's simplify_quadric_decimation with ratio
+        simplified = mesh.simplify_quadric_decimation(percent=reduction_ratio)
         print(f"[Hunyuan3D-Tex] Simplified mesh: {len(mesh.faces)} -> {len(simplified.faces)} faces")
         return simplified
+    except TypeError:
+        # Fallback: try with face_count parameter (older trimesh versions)
+        try:
+            simplified = mesh.simplify_quadric_decimation(face_count=target_faces)
+            print(f"[Hunyuan3D-Tex] Simplified mesh: {len(mesh.faces)} -> {len(simplified.faces)} faces")
+            return simplified
+        except Exception as e:
+            print(f"[Hunyuan3D-Tex] Could not simplify mesh: {e}")
+            return mesh
     except Exception as e:
         print(f"[Hunyuan3D-Tex] Could not simplify mesh: {e}")
         return mesh

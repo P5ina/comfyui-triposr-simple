@@ -395,10 +395,43 @@ class ImageTo3DMesh:
                     new_faces = bake_output["indices"]
                     uvs = bake_output["uvs"]
 
-                    # Convert colors to uint8 image
-                    texture_colors = (bake_output["colors"] * 255.0).astype(np.uint8)
+                    # Convert colors to float for processing
+                    texture_colors = bake_output["colors"].copy()  # RGBA float [0,1]
+
+                    # Apply color correction to fix washed out TripoSR colors
+                    rgb = texture_colors[:, :, :3]
+                    alpha = texture_colors[:, :, 3:4]
+
+                    # Only process non-transparent pixels
+                    mask = alpha[:, :, 0] > 0.01
+
+                    if mask.any():
+                        # 1. Auto-levels: stretch RGB range to use full 0-1 range
+                        rgb_masked = rgb[mask]
+                        for c in range(3):
+                            channel = rgb_masked[:, c]
+                            c_min, c_max = np.percentile(channel, [1, 99])
+                            if c_max > c_min:
+                                rgb[:, :, c] = np.clip((rgb[:, :, c] - c_min) / (c_max - c_min), 0, 1)
+
+                        # 2. Boost saturation
+                        gray = np.mean(rgb, axis=2, keepdims=True)
+                        saturation_boost = 1.3
+                        rgb = gray + (rgb - gray) * saturation_boost
+                        rgb = np.clip(rgb, 0, 1)
+
+                        # 3. Increase contrast (S-curve)
+                        contrast = 1.2
+                        rgb = (rgb - 0.5) * contrast + 0.5
+                        rgb = np.clip(rgb, 0, 1)
+
+                    # Recombine
+                    texture_colors = np.concatenate([rgb, alpha], axis=2)
+                    texture_colors = (texture_colors * 255.0).astype(np.uint8)
+
                     # Flip texture vertically (UV convention)
                     texture_image = Image.fromarray(texture_colors).transpose(Image.FLIP_TOP_BOTTOM)
+                    print("[TripoSR] Applied color correction to texture")
 
                     # Create textured mesh
                     mesh = trimesh.Trimesh(

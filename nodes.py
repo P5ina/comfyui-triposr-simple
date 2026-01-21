@@ -519,8 +519,8 @@ class RenderMesh8Directions:
         bg_color: Tuple[float, float, float, float]
     ) -> np.ndarray:
         """Render mesh from a single viewpoint."""
-        # Create pyrender scene with more ambient light to show vertex colors
-        scene = pyrender.Scene(bg_color=bg_color, ambient_light=[0.7, 0.7, 0.7])
+        # Create pyrender scene with less ambient light for more saturated colors
+        scene = pyrender.Scene(bg_color=bg_color, ambient_light=[0.3, 0.3, 0.3])
 
         # Convert trimesh to pyrender mesh
         # DON'T pass a material - let pyrender use vertex colors from trimesh
@@ -532,19 +532,19 @@ class RenderMesh8Directions:
         camera_pose = self._create_camera_pose(azimuth, elevation, distance)
         scene.add(camera, pose=camera_pose)
 
-        # Add softer lights that don't wash out vertex colors
-        # Key light (main)
-        key_light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=1.5)
-        key_pose = self._create_camera_pose(azimuth - 45, elevation + 30, 1.0)
+        # Add lights for better color rendering
+        # Key light (main) - stronger for more saturated vertex colors
+        key_light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=2.5)
+        key_pose = self._create_camera_pose(azimuth - 30, elevation + 45, 1.0)
         scene.add(key_light, pose=key_pose)
 
-        # Fill light (softer, opposite side)
-        fill_light = pyrender.DirectionalLight(color=[0.9, 0.9, 0.9], intensity=0.8)
-        fill_pose = self._create_camera_pose(azimuth + 45, elevation, 1.0)
+        # Fill light (opposite side)
+        fill_light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=1.5)
+        fill_pose = self._create_camera_pose(azimuth + 60, elevation + 10, 1.0)
         scene.add(fill_light, pose=fill_pose)
 
         # Back light (rim)
-        back_light = pyrender.DirectionalLight(color=[0.8, 0.8, 0.8], intensity=0.5)
+        back_light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=0.8)
         back_pose = self._create_camera_pose(azimuth + 180, elevation - 10, 1.0)
         scene.add(back_light, pose=back_pose)
 
@@ -579,7 +579,15 @@ class RenderMesh8Directions:
         center = (bounds[0] + bounds[1]) / 2
         mesh_centered.vertices -= center
 
+        # Rotate mesh to stand upright (TripoSR outputs mesh on its side)
+        # Rotate -90 degrees around X axis
+        rotation_matrix = trimesh.transformations.rotation_matrix(
+            -np.pi / 2, [1, 0, 0], point=[0, 0, 0]
+        )
+        mesh_centered.apply_transform(rotation_matrix)
+
         # Scale to fit in unit cube, then apply 0.7 factor for padding
+        bounds = mesh_centered.bounds  # Recalculate after rotation
         extents = bounds[1] - bounds[0]  # [width, height, depth]
         max_extent = np.max(extents)
         scale = 1.0 / max_extent

@@ -470,7 +470,7 @@ class RenderMesh8Directions:
                 "mesh": ("MESH",),
                 "render_size": ("INT", {"default": 512, "min": 64, "max": 1024, "step": 64}),
                 "elevation": ("FLOAT", {"default": 20.0, "min": -90.0, "max": 90.0, "step": 5.0}),
-                "distance": ("FLOAT", {"default": 2.0, "min": 0.5, "max": 10.0, "step": 0.1}),
+                "distance": ("FLOAT", {"default": 1.5, "min": 0.5, "max": 10.0, "step": 0.1}),
                 "background_color": (["white", "black", "transparent"],),
             }
         }
@@ -586,12 +586,12 @@ class RenderMesh8Directions:
         )
         mesh_centered.apply_transform(rotation_matrix)
 
-        # Scale to fit in unit cube, then apply 0.7 factor for padding
+        # Scale to fit in unit cube, larger factor = fills more of frame
         bounds = mesh_centered.bounds  # Recalculate after rotation
         extents = bounds[1] - bounds[0]  # [width, height, depth]
         max_extent = np.max(extents)
         scale = 1.0 / max_extent
-        mesh_centered.vertices *= scale * 0.7
+        mesh_centered.vertices *= scale * 1.2  # Fill more of the frame
 
         rendered_images = []
 

@@ -12,6 +12,7 @@ from .nodes_common import resize_foreground, rgba_to_rgb_gray_background
 
 # Global model cache
 _hunyuan3d_model_cache = {}
+_hunyuan3d_texture_model_cache = {}
 
 
 def get_hunyuan3d_checkpoints():
@@ -331,13 +332,151 @@ class ImageTo3DMeshHunyuan:
         return (mesh,)
 
 
+class LoadHunyuan3DTextureModel:
+    """
+    Loads the Hunyuan3D-2 texture/paint model for adding textures to meshes.
+    """
+
+    CATEGORY = "Hunyuan3D"
+    RETURN_TYPES = ("HUNYUAN3D_TEXTURE_MODEL",)
+    RETURN_NAMES = ("texture_model",)
+    FUNCTION = "load"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model_path": (["tencent/Hunyuan3D-2"],),
+                "device": (["cuda:0", "cuda:1", "cpu"],),
+                "low_vram_mode": ("BOOLEAN", {"default": True}),
+            }
+        }
+
+    def load(self, model_path: str, device: str, low_vram_mode: bool):
+        global _hunyuan3d_texture_model_cache
+
+        cache_key = f"tex_{model_path}_{device}_{low_vram_mode}"
+
+        if cache_key in _hunyuan3d_texture_model_cache:
+            print(f"[Hunyuan3D-Tex] Using cached texture model")
+            return (_hunyuan3d_texture_model_cache[cache_key],)
+
+        print(f"[Hunyuan3D-Tex] Loading texture model: {model_path} on {device}...")
+
+        try:
+            from hy3dgen.texgen import Hunyuan3DPaintPipeline
+        except ImportError:
+            raise ImportError(
+                "Hunyuan3D texture module not installed. Install with:\n"
+                "  pip install git+https://github.com/Tencent/Hunyuan3D-2.git"
+            )
+
+        pipeline = Hunyuan3DPaintPipeline.from_pretrained(model_path)
+
+        if low_vram_mode:
+            pipeline.enable_model_cpu_offload()
+            print("[Hunyuan3D-Tex] Low VRAM mode enabled")
+        else:
+            pipeline.to(device)
+
+        _hunyuan3d_texture_model_cache[cache_key] = pipeline
+        print(f"[Hunyuan3D-Tex] Texture model loaded successfully")
+
+        return (pipeline,)
+
+
+class TextureMeshHunyuan:
+    """
+    Applies textures to a mesh using Hunyuan3D-2 Paint pipeline.
+
+    Takes a mesh and reference image, generates UV-mapped textures.
+    """
+
+    CATEGORY = "Hunyuan3D"
+    RETURN_TYPES = ("MESH",)
+    RETURN_NAMES = ("textured_mesh",)
+    FUNCTION = "texture"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "texture_model": ("HUNYUAN3D_TEXTURE_MODEL",),
+                "mesh": ("MESH",),
+                "image": ("IMAGE",),
+                "unload_model": ("BOOLEAN", {"default": True}),
+            },
+            "optional": {
+                "mask": ("MASK",),
+            }
+        }
+
+    def texture(
+        self,
+        texture_model,
+        mesh,
+        image: torch.Tensor,
+        unload_model: bool,
+        mask: torch.Tensor = None
+    ):
+        global _hunyuan3d_texture_model_cache
+
+        # Free up VRAM
+        try:
+            import comfy.model_management as mm
+            print("[Hunyuan3D-Tex] Unloading ComfyUI models to free VRAM...")
+            mm.unload_all_models()
+            mm.soft_empty_cache()
+        except Exception as e:
+            print(f"[Hunyuan3D-Tex] Could not unload ComfyUI models: {e}")
+
+        # Convert image to PIL
+        img_np = image[0].cpu().numpy()
+
+        # If mask provided, apply it
+        if mask is not None:
+            mask_np = mask.cpu().numpy()
+            if len(mask_np.shape) == 3:
+                mask_np = mask_np[0]
+            rgba_np = apply_mask_to_image(img_np, mask_np)
+            pil_image = Image.fromarray(rgba_np, 'RGBA')
+            print(f"[Hunyuan3D-Tex] Input: RGBA image with mask {pil_image.size}")
+        elif img_np.shape[2] == 4:
+            pil_image = Image.fromarray((img_np * 255).astype(np.uint8), 'RGBA')
+            print(f"[Hunyuan3D-Tex] Input: RGBA image {pil_image.size}")
+        else:
+            pil_image = Image.fromarray((img_np * 255).astype(np.uint8), 'RGB')
+            print(f"[Hunyuan3D-Tex] Input: RGB image {pil_image.size}")
+
+        print(f"[Hunyuan3D-Tex] Generating textures for mesh with {len(mesh.vertices)} vertices...")
+
+        with torch.no_grad():
+            textured_mesh = texture_model(mesh, image=pil_image)
+
+        print(f"[Hunyuan3D-Tex] Texturing complete")
+
+        if unload_model:
+            print("[Hunyuan3D-Tex] Unloading texture model...")
+            texture_model.to("cpu")
+            _hunyuan3d_texture_model_cache.clear()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            print("[Hunyuan3D-Tex] Model unloaded")
+
+        return (textured_mesh,)
+
+
 # Node mappings
 NODE_CLASS_MAPPINGS = {
     "LoadHunyuan3DModel": LoadHunyuan3DModel,
     "ImageTo3DMeshHunyuan": ImageTo3DMeshHunyuan,
+    "LoadHunyuan3DTextureModel": LoadHunyuan3DTextureModel,
+    "TextureMeshHunyuan": TextureMeshHunyuan,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "LoadHunyuan3DModel": "Load Hunyuan3D Model",
     "ImageTo3DMeshHunyuan": "Image to 3D Mesh (Hunyuan3D)",
+    "LoadHunyuan3DTextureModel": "Load Hunyuan3D Texture Model",
+    "TextureMeshHunyuan": "Texture Mesh (Hunyuan3D)",
 }

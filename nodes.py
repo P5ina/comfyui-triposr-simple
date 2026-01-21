@@ -634,12 +634,12 @@ class RenderMesh8Directions:
                 mesh_centered.apply_transform(rot_x)
                 mesh_centered.apply_transform(rot_y)
         else:
-            # Manual rotation to stand upright
+            # Manual rotation to stand upright and face forward
             rot_x = trimesh.transformations.rotation_matrix(
                 -np.pi / 2, [1, 0, 0], point=[0, 0, 0]
             )
             rot_y = trimesh.transformations.rotation_matrix(
-                np.pi / 2, [0, 1, 0], point=[0, 0, 0]
+                -np.pi / 2, [0, 1, 0], point=[0, 0, 0]  # Changed from +90 to -90
             )
             mesh_centered.apply_transform(rot_x)
             mesh_centered.apply_transform(rot_y)

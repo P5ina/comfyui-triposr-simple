@@ -222,97 +222,45 @@ def main():
     image = rgba_to_rgb_gray_bg(image)
     print(f"      Preprocessed: {image.size}, mode={image.mode}")
 
-    # Generate mesh
-    print("\n[3/4] Generating 3D mesh...")
+    # Generate mesh with vertex colors (cleaner than texture baking)
+    print("\n[3/4] Generating 3D mesh with vertex colors...")
     resolution = 256
-    texture_resolution = 1024
 
     with torch.no_grad():
         scene_codes = model([image], device="cuda:0")
 
-        # Try texture baking
-        try:
-            import moderngl
-            from scipy import ndimage
+        print("      Extracting mesh with vertex colors...")
+        meshes = model.extract_mesh(scene_codes, has_vertex_color=True, resolution=resolution)
+        mesh = meshes[0]
 
-            _orig = moderngl.create_context
-            def _egl(*a, **kw):
-                kw.setdefault('backend', 'egl')
-                return _orig(*a, **kw)
-            moderngl.create_context = _egl
+        # Apply color correction to vertex colors
+        if hasattr(mesh.visual, 'vertex_colors') and mesh.visual.vertex_colors is not None:
+            print("      Applying color correction...")
+            vc = mesh.visual.vertex_colors.astype(np.float32) / 255.0
+            rgb = vc[:, :3]
 
-            from tsr.bake_texture import bake_texture
+            # Auto-levels: stretch RGB range
+            for c in range(3):
+                c_min, c_max = np.percentile(rgb[:, c], [1, 99])
+                if c_max > c_min:
+                    rgb[:, c] = np.clip((rgb[:, c] - c_min) / (c_max - c_min), 0, 1)
 
-            print("      Extracting mesh...")
-            meshes = model.extract_mesh(scene_codes, has_vertex_color=False, resolution=resolution)
-            mesh = meshes[0]
+            # Saturation boost
+            gray = np.mean(rgb, axis=1, keepdims=True)
+            rgb = gray + (rgb - gray) * 1.3
+            rgb = np.clip(rgb, 0, 1)
 
-            print(f"      Baking texture at {texture_resolution}x{texture_resolution}...")
-            bake_output = bake_texture(mesh, model, scene_codes[0], texture_resolution)
+            # Contrast
+            rgb = (rgb - 0.5) * 1.2 + 0.5
+            rgb = np.clip(rgb, 0, 1)
 
-            new_vertices = mesh.vertices[bake_output["vmapping"]]
-            new_faces = bake_output["indices"]
-            uvs = bake_output["uvs"]
+            # Update vertex colors
+            vc[:, :3] = rgb
+            mesh.visual.vertex_colors = (vc * 255).astype(np.uint8)
+            print("      Color correction applied!")
 
-            # Color correction
-            texture_colors = bake_output["colors"].copy()
-            rgb = texture_colors[:, :, :3]
-            alpha = texture_colors[:, :, 3:4]
-            mask = alpha[:, :, 0] > 0.01
-
-            if mask.any():
-                rgb_masked = rgb[mask]
-                for c in range(3):
-                    channel = rgb_masked[:, c]
-                    c_min, c_max = np.percentile(channel, [1, 99])
-                    if c_max > c_min:
-                        rgb[:, :, c] = np.clip((rgb[:, :, c] - c_min) / (c_max - c_min), 0, 1)
-
-                gray = np.mean(rgb, axis=2, keepdims=True)
-                rgb = gray + (rgb - gray) * 1.3
-                rgb = np.clip(rgb, 0, 1)
-
-                rgb = (rgb - 0.5) * 1.2 + 0.5
-                rgb = np.clip(rgb, 0, 1)
-
-            # Inpaint texture to fill background - prevents edge artifacts
-            texture_colors = np.concatenate([rgb, alpha], axis=2)
-            texture_colors = (texture_colors * 255.0).astype(np.uint8)
-
-            try:
-                import cv2
-                print("      Inpainting texture background...")
-                inpaint_mask = (alpha[:, :, 0] < 0.01).astype(np.uint8) * 255
-                rgb_uint8 = texture_colors[:, :, :3]
-                inpainted = cv2.inpaint(rgb_uint8, inpaint_mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
-                texture_colors[:, :, :3] = inpainted
-            except ImportError:
-                print("      cv2 not available, skipping inpainting")
-
-            texture_image = Image.fromarray(texture_colors).transpose(Image.FLIP_TOP_BOTTOM)
-
-            # Save texture for inspection
-            texture_image.save("/tmp/test_texture.png")
-            print("      Saved texture to /tmp/test_texture.png")
-
-            # Create mesh (will render with Open3D using texture)
-            mesh = trimesh.Trimesh(vertices=new_vertices, faces=new_faces)
-            # Store texture info for rendering
-            stored_texture = texture_image
-            stored_uvs = uvs
-
-            print(f"      Mesh with texture: {len(mesh.vertices)} verts, {len(mesh.faces)} faces")
-
-            has_texture = True
-
-        except Exception as e:
-            print(f"      Texture baking failed: {e}")
-            print("      Falling back to vertex colors...")
-            meshes = model.extract_mesh(scene_codes, has_vertex_color=True, resolution=resolution)
-            mesh = meshes[0]
-            stored_texture = None
-            stored_uvs = None
-            has_texture = False
+        print(f"      Mesh: {len(mesh.vertices)} verts, {len(mesh.faces)} faces")
+        has_texture = False
 
     # Transform mesh
     bounds = mesh.bounds
@@ -340,10 +288,7 @@ def main():
 
     for name, azimuth in directions:
         print(f"      Rendering {name} ({azimuth}°)...")
-        if has_texture and stored_texture is not None:
-            color = render_mesh_o3d(mesh, stored_texture, stored_uvs, azimuth, elevation=20.0, distance=1.5, size=512)
-        else:
-            color = render_mesh(mesh, azimuth, elevation=20.0, distance=1.5, size=512)
+        color = render_mesh(mesh, azimuth, elevation=20.0, distance=1.5, size=512)
         Image.fromarray(color).save(f"/tmp/test_renders/{name}.png")
 
     print("\n" + "=" * 60)

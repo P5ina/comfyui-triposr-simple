@@ -472,6 +472,7 @@ class RenderMesh8Directions:
                 "elevation": ("FLOAT", {"default": 20.0, "min": -90.0, "max": 90.0, "step": 5.0}),
                 "distance": ("FLOAT", {"default": 1.5, "min": 0.5, "max": 10.0, "step": 0.1}),
                 "background_color": (["white", "black", "transparent"],),
+                "auto_align": ("BOOLEAN", {"default": True}),
                 "mesh_pitch": ("FLOAT", {"default": 0.0, "min": -45.0, "max": 45.0, "step": 1.0}),
                 "mesh_roll": ("FLOAT", {"default": 0.0, "min": -45.0, "max": 45.0, "step": 1.0}),
             }
@@ -566,6 +567,7 @@ class RenderMesh8Directions:
         elevation: float,
         distance: float,
         background_color: str,
+        auto_align: bool,
         mesh_pitch: float,
         mesh_roll: float
     ):
@@ -583,17 +585,58 @@ class RenderMesh8Directions:
         center = (bounds[0] + bounds[1]) / 2
         mesh_centered.vertices -= center
 
-        # Rotate mesh to stand upright (TripoSR outputs mesh on its side)
-        # First rotate -90 degrees around X axis to stand up
-        rot_x = trimesh.transformations.rotation_matrix(
-            -np.pi / 2, [1, 0, 0], point=[0, 0, 0]
-        )
-        # Then rotate 90 degrees around Y axis to face forward
-        rot_y = trimesh.transformations.rotation_matrix(
-            np.pi / 2, [0, 1, 0], point=[0, 0, 0]
-        )
-        mesh_centered.apply_transform(rot_x)
-        mesh_centered.apply_transform(rot_y)
+        if auto_align:
+            # Auto-align using PCA to find principal axes
+            try:
+                from sklearn.decomposition import PCA
+                pca = PCA(n_components=3)
+                pca.fit(mesh_centered.vertices)
+
+                # Create rotation matrix from principal components
+                # PCA components are ordered by variance (largest first)
+                components = pca.components_
+
+                # We want: X = width (largest horizontal), Y = up, Z = depth
+                # Reorder so the smallest variance axis becomes Y (up)
+                variances = pca.explained_variance_
+                up_idx = np.argmin(variances)  # Smallest variance = thinnest direction = up
+
+                # Build rotation matrix
+                axes = list(range(3))
+                axes.remove(up_idx)
+
+                rotation = np.eye(4)
+                rotation[:3, 1] = components[up_idx]  # Y = up (smallest variance)
+                rotation[:3, 0] = components[axes[0]]  # X = first horizontal
+                rotation[:3, 2] = components[axes[1]]  # Z = second horizontal
+
+                # Ensure right-handed coordinate system
+                if np.linalg.det(rotation[:3, :3]) < 0:
+                    rotation[:3, 2] *= -1
+
+                mesh_centered.apply_transform(rotation.T)  # Inverse rotation
+                print("[TripoSR] Auto-aligned mesh using PCA")
+            except Exception as e:
+                print(f"[TripoSR] Auto-align failed: {e}, using manual rotation")
+                # Fallback to manual rotation
+                rot_x = trimesh.transformations.rotation_matrix(
+                    -np.pi / 2, [1, 0, 0], point=[0, 0, 0]
+                )
+                rot_y = trimesh.transformations.rotation_matrix(
+                    np.pi / 2, [0, 1, 0], point=[0, 0, 0]
+                )
+                mesh_centered.apply_transform(rot_x)
+                mesh_centered.apply_transform(rot_y)
+        else:
+            # Manual rotation to stand upright
+            rot_x = trimesh.transformations.rotation_matrix(
+                -np.pi / 2, [1, 0, 0], point=[0, 0, 0]
+            )
+            rot_y = trimesh.transformations.rotation_matrix(
+                np.pi / 2, [0, 1, 0], point=[0, 0, 0]
+            )
+            mesh_centered.apply_transform(rot_x)
+            mesh_centered.apply_transform(rot_y)
 
         # Apply user pitch/roll correction to fix tilt from source image perspective
         if mesh_pitch != 0.0:

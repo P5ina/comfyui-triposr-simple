@@ -136,12 +136,29 @@ class LoadTripoSRModel:
 
         print(f"[TripoSR] Loading model from checkpoint: {checkpoint} on {device}...")
 
+        # Check if TripoSR is available
+        triposr_path = Path(__file__).parent / "TripoSR"
+        if not triposr_path.exists():
+            raise ImportError(
+                f"TripoSR not found at {triposr_path}\n"
+                "Please clone it with:\n"
+                f"  cd {Path(__file__).parent}\n"
+                "  git clone https://github.com/VAST-AI-Research/TripoSR.git"
+            )
+
+        # Ensure path is in sys.path
+        if str(triposr_path) not in sys.path:
+            sys.path.insert(0, str(triposr_path))
+
         try:
             from tsr.system import TSR
-        except ImportError:
+        except ImportError as e:
             raise ImportError(
-                "TripoSR not installed. Please install it with: "
-                "pip install git+https://github.com/VAST-AI-Research/TripoSR.git"
+                f"Failed to import TripoSR: {e}\n"
+                f"TripoSR path: {triposr_path}\n"
+                f"sys.path includes TripoSR: {str(triposr_path) in sys.path}\n"
+                "Try installing TripoSR dependencies:\n"
+                "  uv pip install transformers einops omegaconf huggingface_hub"
             )
 
         # Get the full path to the checkpoint

@@ -422,7 +422,7 @@ class TextureMeshHunyuan:
                 "texture_model": ("HUNYUAN3D_TEXTURE_MODEL",),
                 "mesh": ("MESH",),
                 "image": ("IMAGE",),
-                "simplify_mesh": ("BOOLEAN", {"default": True}),
+                "reduce_faces": ("BOOLEAN", {"default": True}),
                 "target_faces": ("INT", {"default": 50000, "min": 1000, "max": 500000, "step": 1000}),
                 "unload_model": ("BOOLEAN", {"default": True}),
             },
@@ -436,7 +436,7 @@ class TextureMeshHunyuan:
         texture_model,
         mesh,
         image: torch.Tensor,
-        simplify_mesh: bool,
+        reduce_faces: bool,
         target_faces: int,
         unload_model: bool,
         mask: torch.Tensor = None
@@ -444,7 +444,7 @@ class TextureMeshHunyuan:
         global _hunyuan3d_texture_model_cache
 
         # Simplify mesh if enabled
-        if simplify_mesh and len(mesh.faces) > target_faces:
+        if reduce_faces and len(mesh.faces) > target_faces:
             print(f"[Hunyuan3D-Tex] Simplifying mesh from {len(mesh.faces)} to ~{target_faces} faces...")
             mesh = simplify_mesh(mesh, target_faces)
 

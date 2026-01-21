@@ -445,20 +445,27 @@ class ImageTo3DMesh:
                     texture_image = Image.fromarray(texture_colors).transpose(Image.FLIP_TOP_BOTTOM)
                     print("[TripoSR] Applied color correction to texture")
 
-                    # Create textured mesh
+                    # Sample texture at UV coordinates to create vertex colors
+                    # (pyrender has issues with textured meshes in headless mode)
+                    texture_array = np.array(texture_image)
+                    tex_h, tex_w = texture_array.shape[:2]
+
+                    # Sample texture at each vertex's UV coordinate
+                    vertex_colors = np.zeros((len(new_vertices), 4), dtype=np.uint8)
+                    for i, uv in enumerate(uvs):
+                        # UV to pixel coordinates (flip V for image coordinates)
+                        px = int(np.clip(uv[0] * (tex_w - 1), 0, tex_w - 1))
+                        py = int(np.clip((1 - uv[1]) * (tex_h - 1), 0, tex_h - 1))
+                        vertex_colors[i] = texture_array[py, px]
+
+                    # Create mesh with vertex colors (color-corrected from texture)
                     mesh = trimesh.Trimesh(
                         vertices=new_vertices,
                         faces=new_faces,
+                        vertex_colors=vertex_colors,
                     )
 
-                    # Apply texture using trimesh's TextureVisuals
-                    from trimesh.visual.texture import TextureVisuals
-                    from trimesh.visual.material import SimpleMaterial
-
-                    material = SimpleMaterial(image=texture_image)
-                    mesh.visual = TextureVisuals(uv=uvs, image=texture_image, material=material)
-
-                    print(f"[TripoSR] Texture baked successfully: {texture_resolution}x{texture_resolution}")
+                    print(f"[TripoSR] Texture baked and converted to vertex colors: {texture_resolution}x{texture_resolution}")
                 except Exception as e:
                     print(f"[TripoSR] Texture baking failed: {e}, falling back to vertex colors")
                     meshes = model.extract_mesh(

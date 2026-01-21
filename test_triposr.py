@@ -4,14 +4,55 @@
 import sys
 sys.path.insert(0, 'TripoSR')
 
-# Stub rembg
 import types
+import numpy as np
+import torch
+
+# Stub rembg
 rembg = types.ModuleType('rembg')
 rembg.remove = lambda x, **kw: x
 rembg.new_session = lambda *a, **kw: None
 sys.modules['rembg'] = rembg
 
-import torch
+# Stub torchmcubes with PyMCubes or scikit-image
+try:
+    import mcubes
+    print("Using PyMCubes for marching cubes")
+
+    def marching_cubes(volume, threshold):
+        device = volume.device if isinstance(volume, torch.Tensor) else torch.device('cpu')
+        if isinstance(volume, torch.Tensor):
+            vol_np = volume.detach().cpu().numpy()
+        else:
+            vol_np = np.array(volume)
+
+        print(f"  mcubes input: shape={vol_np.shape}, min={vol_np.min():.4f}, max={vol_np.max():.4f}")
+        verts, faces = mcubes.marching_cubes(vol_np, threshold)
+        print(f"  mcubes output: {len(verts)} verts, {len(faces)} faces")
+
+        return torch.from_numpy(verts.astype(np.float32)).to(device), torch.from_numpy(faces.astype(np.int64)).to(device)
+
+except ImportError:
+    from skimage import measure
+    print("Using scikit-image for marching cubes")
+
+    def marching_cubes(volume, threshold):
+        device = volume.device if isinstance(volume, torch.Tensor) else torch.device('cpu')
+        if isinstance(volume, torch.Tensor):
+            vol_np = volume.detach().cpu().numpy()
+        else:
+            vol_np = np.array(volume)
+
+        print(f"  skimage input: shape={vol_np.shape}, min={vol_np.min():.4f}, max={vol_np.max():.4f}")
+        verts, faces, _, _ = measure.marching_cubes(vol_np, level=threshold)
+        print(f"  skimage output: {len(verts)} verts, {len(faces)} faces")
+
+        return torch.from_numpy(verts.astype(np.float32)).to(device), torch.from_numpy(faces.astype(np.int64)).to(device)
+
+torchmcubes = types.ModuleType('torchmcubes')
+torchmcubes.marching_cubes = marching_cubes
+sys.modules['torchmcubes'] = torchmcubes
+
 from PIL import Image
 from tsr.system import TSR
 

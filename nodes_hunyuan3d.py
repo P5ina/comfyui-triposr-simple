@@ -135,12 +135,6 @@ class LoadHunyuan3DModel:
             print(f"[Hunyuan3D] Using cached model: {model_path} on {device}")
             return (_hunyuan3d_model_cache[cache_key],)
 
-        # Setup progress bar for loading
-        pbar = None
-        if HAS_COMFY_UTILS:
-            pbar = comfy.utils.ProgressBar(3)
-            pbar.update_absolute(0, 3, ("Loading shape model...",))
-
         print(f"[Hunyuan3D] Loading model: {model_path} on {device}...")
 
         try:
@@ -151,9 +145,6 @@ class LoadHunyuan3DModel:
                 "  pip install diffusers>=0.31.0 accelerate transformers\n"
                 "  pip install git+https://github.com/Tencent/Hunyuan3D-2.git"
             )
-
-        if pbar:
-            pbar.update_absolute(1, 3, ("Downloading/loading weights...",))
 
         if model_path.startswith("tencent/"):
             pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(model_path)
@@ -168,9 +159,6 @@ class LoadHunyuan3DModel:
             model_dir = os.path.dirname(full_path)
             pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(model_dir)
 
-        if pbar:
-            pbar.update_absolute(2, 3, ("Moving to device...",))
-
         if low_vram_mode:
             pipeline.enable_model_cpu_offload()
             print("[Hunyuan3D] Low VRAM mode enabled (CPU offload)")
@@ -178,10 +166,6 @@ class LoadHunyuan3DModel:
             pipeline.to(device)
 
         _hunyuan3d_model_cache[cache_key] = pipeline
-
-        if pbar:
-            pbar.update_absolute(3, 3, ("Complete",))
-
         print(f"[Hunyuan3D] Model loaded successfully on {device}")
 
         return (pipeline,)
@@ -292,26 +276,32 @@ class ImageTo3DMeshHunyuan:
         # Setup progress bar
         pbar = None
         if HAS_COMFY_UTILS:
-            pbar = comfy.utils.ProgressBar(num_inference_steps + 10)  # +10 for volume decoding
+            pbar = comfy.utils.ProgressBar(num_inference_steps)
 
-        def progress_callback(step, timestep, latents):
+        def progress_callback(pipe, step, timestep, callback_kwargs):
             if pbar:
                 pbar.update(1)
+            return callback_kwargs
 
         with torch.no_grad():
-            result = model(
-                image=pil_image,
-                num_inference_steps=num_inference_steps,
-                guidance_scale=guidance_scale,
-                octree_resolution=octree_resolution,
-                generator=generator,
-                callback=progress_callback,
-                callback_steps=1
-            )
-
-        # Complete progress bar
-        if pbar:
-            pbar.update(10)  # Volume decoding steps
+            try:
+                result = model(
+                    image=pil_image,
+                    num_inference_steps=num_inference_steps,
+                    guidance_scale=guidance_scale,
+                    octree_resolution=octree_resolution,
+                    generator=generator,
+                    callback_on_step_end=progress_callback
+                )
+            except TypeError:
+                # Fallback without callback if not supported
+                result = model(
+                    image=pil_image,
+                    num_inference_steps=num_inference_steps,
+                    guidance_scale=guidance_scale,
+                    octree_resolution=octree_resolution,
+                    generator=generator
+                )
 
         mesh = result[0]
 
@@ -363,12 +353,6 @@ class LoadHunyuan3DTextureModel:
             print(f"[Hunyuan3D-Tex] Using cached texture model")
             return (_hunyuan3d_texture_model_cache[cache_key],)
 
-        # Setup progress bar for loading
-        pbar = None
-        if HAS_COMFY_UTILS:
-            pbar = comfy.utils.ProgressBar(3)
-            pbar.update_absolute(0, 3, ("Loading texture model...",))
-
         print(f"[Hunyuan3D-Tex] Loading texture model: {model_path} on {device}...")
 
         try:
@@ -379,13 +363,7 @@ class LoadHunyuan3DTextureModel:
                 "  pip install git+https://github.com/Tencent/Hunyuan3D-2.git"
             )
 
-        if pbar:
-            pbar.update_absolute(1, 3, ("Downloading/loading weights...",))
-
         pipeline = Hunyuan3DPaintPipeline.from_pretrained(model_path)
-
-        if pbar:
-            pbar.update_absolute(2, 3, ("Configuring pipeline...",))
 
         # Hunyuan3DPaintPipeline doesn't support .to() method
         # Always use CPU offload for memory management
@@ -397,10 +375,6 @@ class LoadHunyuan3DTextureModel:
             print(f"[Hunyuan3D-Tex] Model loaded (device managed internally)")
 
         _hunyuan3d_texture_model_cache[cache_key] = pipeline
-
-        if pbar:
-            pbar.update_absolute(3, 3, ("Complete",))
-
         print(f"[Hunyuan3D-Tex] Texture model loaded successfully")
 
         return (pipeline,)

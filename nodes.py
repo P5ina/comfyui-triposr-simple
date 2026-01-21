@@ -30,6 +30,55 @@ if 'PYOPENGL_PLATFORM' not in os.environ:
 import pyrender
 
 
+# ============================================================================
+# Patch torchmcubes to use scikit-image if torchmcubes is not available
+# ============================================================================
+def _patch_torchmcubes():
+    """Create a fake torchmcubes module using scikit-image marching cubes."""
+    try:
+        import torchmcubes
+        return  # Already available, no patch needed
+    except ImportError:
+        pass
+
+    print("[TripoSR] torchmcubes not found, using scikit-image marching cubes fallback")
+
+    from skimage import measure
+    import types
+
+    def marching_cubes(volume, threshold):
+        """
+        Scikit-image based marching cubes implementation.
+        Returns vertices and faces as torch tensors.
+        """
+        # Convert to numpy if needed
+        if isinstance(volume, torch.Tensor):
+            vol_np = volume.cpu().numpy()
+        else:
+            vol_np = volume
+
+        # Run marching cubes
+        verts, faces, normals, values = measure.marching_cubes(
+            vol_np,
+            level=threshold,
+            method='lewiner'
+        )
+
+        # Convert to torch tensors
+        verts_tensor = torch.from_numpy(verts.copy()).float()
+        faces_tensor = torch.from_numpy(faces.copy()).long()
+
+        return verts_tensor, faces_tensor
+
+    # Create fake module
+    fake_module = types.ModuleType('torchmcubes')
+    fake_module.marching_cubes = marching_cubes
+    sys.modules['torchmcubes'] = fake_module
+
+_patch_torchmcubes()
+# ============================================================================
+
+
 # Global model cache to avoid reloading
 _triposr_model_cache = {}
 

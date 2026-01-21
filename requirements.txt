@@ -15,6 +15,7 @@ PyOpenGL>=3.1.0
 # Image processing
 Pillow>=9.0.0
 numpy>=1.23.0
+scikit-image>=0.21.0  # For marching cubes fallback (replaces torchmcubes)
 
 # Color quantization (optional, falls back to PIL if not available)
 scikit-learn>=1.0.0

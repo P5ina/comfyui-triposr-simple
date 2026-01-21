@@ -9,6 +9,14 @@ Provides nodes for:
 """
 
 import os
+import sys
+from pathlib import Path
+
+# Add TripoSR to path if cloned locally
+_triposr_local = Path(__file__).parent / "TripoSR"
+if _triposr_local.exists() and str(_triposr_local) not in sys.path:
+    sys.path.insert(0, str(_triposr_local))
+
 import torch
 import numpy as np
 from PIL import Image
@@ -16,7 +24,8 @@ from typing import Tuple, List, Optional
 import trimesh
 
 # Set headless rendering platform before importing pyrender
-os.environ['PYOPENGL_PLATFORM'] = 'egl'
+if 'PYOPENGL_PLATFORM' not in os.environ:
+    os.environ['PYOPENGL_PLATFORM'] = 'egl'
 
 import pyrender
 
@@ -127,7 +136,9 @@ class LoadTripoSRModel:
 class ImageTo3DMesh:
     """
     Converts an input image to a 3D mesh using TripoSR.
-    Optionally removes background before processing.
+
+    Note: Use ComfyUI's background removal nodes before this node
+    for best results with TripoSR.
     """
 
     CATEGORY = "TripoSR"
@@ -142,33 +153,27 @@ class ImageTo3DMesh:
                 "model": ("TRIPOSR_MODEL",),
                 "image": ("IMAGE",),
                 "resolution": ("INT", {"default": 256, "min": 64, "max": 512, "step": 32}),
-                "remove_background": ("BOOLEAN", {"default": True}),
             }
         }
 
-    def generate(self, model, image: torch.Tensor, resolution: int, remove_background: bool):
+    def generate(self, model, image: torch.Tensor, resolution: int):
         # Convert ComfyUI IMAGE tensor (B, H, W, C) to PIL Image
         # ComfyUI images are float32 [0, 1]
         img_np = image[0].cpu().numpy()
         img_np = (img_np * 255).astype(np.uint8)
-        pil_image = Image.fromarray(img_np)
 
-        # Remove background if requested
-        if remove_background:
-            try:
-                from rembg import remove
-                pil_image = remove(pil_image)
-                print("[TripoSR] Background removed")
-            except ImportError:
-                print("[TripoSR] Warning: rembg not installed, skipping background removal")
-
-        # Ensure image is RGB (TripoSR expects RGB)
-        if pil_image.mode == 'RGBA':
+        # Handle RGBA images (from ComfyUI background removal)
+        if img_np.shape[2] == 4:
+            pil_image = Image.fromarray(img_np, 'RGBA')
             # Create white background for transparent areas
             background = Image.new('RGB', pil_image.size, (255, 255, 255))
             background.paste(pil_image, mask=pil_image.split()[3])
             pil_image = background
-        elif pil_image.mode != 'RGB':
+        else:
+            pil_image = Image.fromarray(img_np, 'RGB')
+
+        # Ensure image is RGB (TripoSR expects RGB)
+        if pil_image.mode != 'RGB':
             pil_image = pil_image.convert('RGB')
 
         # Get model device

@@ -1,9 +1,11 @@
 # ComfyUI TripoSR Simple - Dependencies
 # Note: torch, torchvision should already be installed via ComfyUI
 
-# TripoSR - Image to 3D
-# Install separately: pip install git+https://github.com/VAST-AI-Research/TripoSR.git
-# This requires: torch, torchvision, transformers, huggingface_hub
+# TripoSR dependencies
+transformers>=4.35.0
+huggingface_hub>=0.20.0
+omegaconf>=2.3.0
+einops>=0.7.0
 
 # Mesh processing and rendering
 trimesh>=4.0.0
@@ -14,12 +16,13 @@ PyOpenGL>=3.1.0
 Pillow>=9.0.0
 numpy>=1.23.0
 
-# Background removal (optional but recommended)
-rembg>=2.0.50
-
 # Color quantization (optional, falls back to PIL if not available)
 scikit-learn>=1.0.0
 
+# Background removal - OPTIONAL (install separately if needed)
+# Has Python version constraints, may not work on Python 3.10+
+# pip install rembg
+
 # For headless rendering (EGL/OSMesa)
-# On Ubuntu: apt-get install libosmesa6-dev libegl1-mesa-dev
-# On systems without GPU display: set PYOPENGL_PLATFORM=osmesa or egl
+# On Ubuntu: apt-get install libosmesa6-dev libegl1-mesa-dev freeglut3-dev
+# Set environment: export PYOPENGL_PLATFORM=egl (or osmesa)

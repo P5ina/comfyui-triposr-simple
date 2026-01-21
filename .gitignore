@@ -46,3 +46,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# TripoSR (cloned during install)
+TripoSR/

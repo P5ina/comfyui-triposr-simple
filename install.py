@@ -9,6 +9,7 @@ Run this script from the ComfyUI/custom_nodes/comfyui-triposr-simple directory.
 import os
 import sys
 import subprocess
+import shutil
 from pathlib import Path
 
 
@@ -23,25 +24,57 @@ def get_comfyui_dir():
     return None
 
 
+def get_pip_command():
+    """Determine whether to use uv pip or regular pip."""
+    # Check if uv is available
+    if shutil.which("uv"):
+        return ["uv", "pip", "install"]
+    else:
+        return [sys.executable, "-m", "pip", "install"]
+
+
 def install_dependencies():
     """Install Python dependencies."""
     print("Installing Python dependencies...")
 
+    pip_cmd = get_pip_command()
     requirements_file = Path(__file__).parent / "requirements.txt"
 
-    # Install requirements
-    subprocess.check_call([
-        sys.executable, "-m", "pip", "install", "-r", str(requirements_file)
-    ])
+    print(f"Using: {' '.join(pip_cmd)}")
 
-    # Install TripoSR
-    print("\nInstalling TripoSR...")
-    subprocess.check_call([
-        sys.executable, "-m", "pip", "install",
-        "git+https://github.com/VAST-AI-Research/TripoSR.git"
-    ])
+    # Install requirements
+    subprocess.check_call(pip_cmd + ["-r", str(requirements_file)])
 
     print("\nDependencies installed successfully!")
+
+
+def install_triposr():
+    """Install TripoSR from source."""
+    print("\nInstalling TripoSR...")
+
+    pip_cmd = get_pip_command()
+
+    # Clone TripoSR repo and install dependencies manually
+    # TripoSR doesn't have setup.py, so we clone and add to path
+    triposr_dir = Path(__file__).parent / "TripoSR"
+
+    if triposr_dir.exists():
+        print(f"TripoSR already cloned at {triposr_dir}")
+    else:
+        print("Cloning TripoSR repository...")
+        subprocess.check_call([
+            "git", "clone", "https://github.com/VAST-AI-Research/TripoSR.git",
+            str(triposr_dir)
+        ])
+
+    # Install TripoSR's requirements
+    triposr_requirements = triposr_dir / "requirements.txt"
+    if triposr_requirements.exists():
+        print("Installing TripoSR requirements...")
+        subprocess.check_call(pip_cmd + ["-r", str(triposr_requirements)])
+
+    print("\nTripoSR installed successfully!")
+    print(f"TripoSR path: {triposr_dir}")
 
 
 def setup_model_directory():
@@ -55,7 +88,7 @@ def setup_model_directory():
     triposr_models_dir = comfyui_dir / "models" / "triposr"
     triposr_models_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\nTripoSR models directory created at: {triposr_models_dir}")
+    print(f"\nTripoSR models directory: {triposr_models_dir}")
     return triposr_models_dir
 
 
@@ -93,9 +126,8 @@ def download_model(models_dir: Path):
 
     except ImportError:
         print("huggingface_hub not installed. Installing...")
-        subprocess.check_call([
-            sys.executable, "-m", "pip", "install", "huggingface_hub"
-        ])
+        pip_cmd = get_pip_command()
+        subprocess.check_call(pip_cmd + ["huggingface_hub"])
         download_model(models_dir)
 
     except Exception as e:
@@ -111,23 +143,30 @@ def setup_headless_rendering():
     print("\nChecking headless rendering setup...")
 
     # Check for EGL or OSMesa
-    has_egl = os.path.exists("/usr/lib/x86_64-linux-gnu/libEGL.so") or \
-              os.path.exists("/usr/lib/libEGL.so")
-    has_osmesa = os.path.exists("/usr/lib/x86_64-linux-gnu/libOSMesa.so") or \
-                 os.path.exists("/usr/lib/libOSMesa.so")
+    egl_paths = [
+        "/usr/lib/x86_64-linux-gnu/libEGL.so",
+        "/usr/lib/libEGL.so",
+        "/usr/lib/x86_64-linux-gnu/libEGL.so.1"
+    ]
+    osmesa_paths = [
+        "/usr/lib/x86_64-linux-gnu/libOSMesa.so",
+        "/usr/lib/libOSMesa.so"
+    ]
+
+    has_egl = any(os.path.exists(p) for p in egl_paths)
+    has_osmesa = any(os.path.exists(p) for p in osmesa_paths)
 
     if has_egl:
         print("EGL found - headless rendering should work.")
-        print("Set PYOPENGL_PLATFORM=egl if you encounter issues.")
+        print("The node automatically sets PYOPENGL_PLATFORM=egl")
     elif has_osmesa:
         print("OSMesa found - headless rendering should work.")
-        print("Set PYOPENGL_PLATFORM=osmesa if you encounter issues.")
+        print("You may need to set: export PYOPENGL_PLATFORM=osmesa")
     else:
         print("Warning: Neither EGL nor OSMesa found.")
         print("Headless rendering may not work on this system.")
         print("\nTo install on Ubuntu/Debian:")
-        print("  sudo apt-get install libegl1-mesa-dev libosmesa6-dev")
-        print("\nAlternatively, run with a display (X11) available.")
+        print("  apt-get install libegl1-mesa-dev libosmesa6-dev freeglut3-dev")
 
 
 def main():
@@ -143,19 +182,27 @@ def main():
         print(f"Error installing dependencies: {e}")
         sys.exit(1)
 
-    # Step 2: Setup model directory
+    # Step 2: Install TripoSR
+    try:
+        install_triposr()
+    except Exception as e:
+        print(f"Error installing TripoSR: {e}")
+        print("You may need to install it manually.")
+
+    # Step 3: Setup model directory
     models_dir = setup_model_directory()
 
-    # Step 3: Ask about model download
+    # Step 4: Ask about model download
     if models_dir:
-        response = input("\nDownload TripoSR model from HuggingFace? (~1GB) [y/N]: ")
+        print("\n" + "-" * 60)
+        response = input("Download TripoSR model from HuggingFace? (~1GB) [y/N]: ")
         if response.lower() in ('y', 'yes'):
             download_model(models_dir)
         else:
             print("\nSkipping model download.")
             print(f"Please manually place model.ckpt and config.yaml in: {models_dir}")
 
-    # Step 4: Check headless rendering
+    # Step 5: Check headless rendering
     setup_headless_rendering()
 
     print("\n" + "=" * 60)

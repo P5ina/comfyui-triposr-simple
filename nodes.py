@@ -384,10 +384,22 @@ class ImageTo3DMesh:
 
                 # Bake texture
                 try:
+                    # Set up headless OpenGL for moderngl (required for texture baking)
+                    import os
+                    os.environ["PYOPENGL_PLATFORM"] = "egl"
+
+                    # Patch moderngl to use EGL backend
+                    import moderngl
+                    _original_create_context = moderngl.create_context
+                    def _create_context_egl(*args, **kwargs):
+                        kwargs.setdefault('backend', 'egl')
+                        return _original_create_context(*args, **kwargs)
+                    moderngl.create_context = _create_context_egl
+
                     from tsr.bake_texture import bake_texture
                     import xatlas
 
-                    print("[TripoSR] Baking texture...")
+                    print("[TripoSR] Baking texture (using EGL backend)...")
                     bake_output = bake_texture(mesh, model, scene_codes[0], texture_resolution)
 
                     # Create new mesh with UV coordinates

@@ -431,6 +431,14 @@ class ImageTo3DMesh:
             )
 
         mesh = meshes[0]
+
+        # Invert normals for PyMCubes fallback (normals are flipped compared to native torchmcubes)
+        # Check if we're using the fallback by checking if torchmcubes is our fake module
+        import torchmcubes
+        if hasattr(torchmcubes, '__file__') is False or torchmcubes.__file__ is None:
+            print("[TripoSR] Using PyMCubes fallback - inverting mesh normals")
+            mesh.invert()
+
         print(f"[TripoSR] Mesh generated: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
 
         # Log mesh bounds for debugging

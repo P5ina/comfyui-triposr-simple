@@ -601,7 +601,7 @@ class RenderMesh8Directions:
         scene = pyrender.Scene(bg_color=bg_color, ambient_light=[0.6, 0.6, 0.6])
 
         # Convert trimesh to pyrender mesh
-        pyrender_mesh = pyrender.Mesh.from_trimesh(render_mesh, smooth=False)
+        pyrender_mesh = pyrender.Mesh.from_trimesh(mesh, smooth=False)
         scene.add(pyrender_mesh)
 
         # Add camera with wider FOV for better framing

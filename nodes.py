@@ -452,16 +452,15 @@ class RenderMesh8Directions:
     FUNCTION = "render"
 
     # Direction angles (azimuth in degrees, clockwise from front)
-    # Offset by -90 to correct for mesh orientation
     DIRECTIONS = [
-        ("N", -90),    # Front
-        ("NE", -45),   # Front-right
-        ("E", 0),      # Right
-        ("SE", 45),    # Back-right
-        ("S", 90),     # Back
-        ("SW", 135),   # Back-left
-        ("W", 180),    # Left
-        ("NW", 225),   # Front-left
+        ("N", 0),      # Front
+        ("NE", 45),    # Front-right
+        ("E", 90),     # Right
+        ("SE", 135),   # Back-right
+        ("S", 180),    # Back
+        ("SW", 225),   # Back-left
+        ("W", 270),    # Left
+        ("NW", 315),   # Front-left
     ]
 
     @classmethod
@@ -581,11 +580,16 @@ class RenderMesh8Directions:
         mesh_centered.vertices -= center
 
         # Rotate mesh to stand upright (TripoSR outputs mesh on its side)
-        # Rotate -90 degrees around X axis
-        rotation_matrix = trimesh.transformations.rotation_matrix(
+        # First rotate -90 degrees around X axis to stand up
+        rot_x = trimesh.transformations.rotation_matrix(
             -np.pi / 2, [1, 0, 0], point=[0, 0, 0]
         )
-        mesh_centered.apply_transform(rotation_matrix)
+        # Then rotate 90 degrees around Y axis to face forward
+        rot_y = trimesh.transformations.rotation_matrix(
+            np.pi / 2, [0, 1, 0], point=[0, 0, 0]
+        )
+        mesh_centered.apply_transform(rot_x)
+        mesh_centered.apply_transform(rot_y)
 
         # Scale to fit in unit cube, larger factor = fills more of frame
         bounds = mesh_centered.bounds  # Recalculate after rotation

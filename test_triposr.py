@@ -175,5 +175,14 @@ if hasattr(mesh.visual, 'vertex_colors') and mesh.visual.vertex_colors is not No
 else:
     print("No vertex colors found!")
 
-mesh.export("/tmp/chair_test.obj")
-print("Exported to /tmp/chair_test.obj")
+# Fix inverted normals by flipping faces
+print("Flipping normals...")
+mesh.invert()
+
+# Export to GLB (better vertex color support than OBJ)
+mesh.export("/tmp/chair_test.glb")
+print("Exported to /tmp/chair_test.glb")
+
+# Also export to PLY (good vertex color support)
+mesh.export("/tmp/chair_test.ply")
+print("Exported to /tmp/chair_test.ply")

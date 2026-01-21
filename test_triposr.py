@@ -180,9 +180,9 @@ if hasattr(mesh.visual, 'vertex_colors') and mesh.visual.vertex_colors is not No
 else:
     print("No vertex colors found!")
 
-# Fix inverted normals by flipping faces
-print("Flipping normals...")
-mesh.invert()
+# Note: With native torchmcubes normals are correct, don't flip
+# With PyMCubes fallback, normals may be inverted
+# mesh.invert()
 
 # Export to GLB (better vertex color support than OBJ)
 mesh.export("/tmp/chair_test.glb")

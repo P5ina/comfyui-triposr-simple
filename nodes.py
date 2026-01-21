@@ -377,33 +377,6 @@ class ImageTo3DMesh:
             )
             mesh = meshes[0]
 
-            # Apply color correction to vertex colors to fix washed out TripoSR colors
-            if hasattr(mesh.visual, 'vertex_colors') and mesh.visual.vertex_colors is not None:
-                print("[TripoSR] Applying color correction to vertex colors...")
-                vc = mesh.visual.vertex_colors.astype(np.float32) / 255.0
-                rgb = vc[:, :3]
-
-                # 1. Auto-levels: stretch RGB range to use full 0-1 range
-                for c in range(3):
-                    c_min, c_max = np.percentile(rgb[:, c], [1, 99])
-                    if c_max > c_min:
-                        rgb[:, c] = np.clip((rgb[:, c] - c_min) / (c_max - c_min), 0, 1)
-
-                # 2. Boost saturation
-                gray = np.mean(rgb, axis=1, keepdims=True)
-                saturation_boost = 1.3
-                rgb = gray + (rgb - gray) * saturation_boost
-                rgb = np.clip(rgb, 0, 1)
-
-                # 3. Increase contrast
-                contrast = 1.2
-                rgb = (rgb - 0.5) * contrast + 0.5
-                rgb = np.clip(rgb, 0, 1)
-
-                # Update vertex colors
-                vc[:, :3] = rgb
-                mesh.visual.vertex_colors = (vc * 255).astype(np.uint8)
-                print("[TripoSR] Color correction applied!")
 
         print(f"[TripoSR] Mesh generated: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
 

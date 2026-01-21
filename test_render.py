@@ -253,41 +253,80 @@ def main():
             meshes = model.extract_mesh(scene_codes, has_vertex_color=True, resolution=resolution)
             mesh = meshes[0]
 
-    # Center and orient mesh
-    bounds = mesh.bounds
-    center = (bounds[0] + bounds[1]) / 2
-    mesh.vertices -= center
+    # Also test with just vertex colors + color correction
+    print("\n[3b/4] Testing vertex colors with correction...")
+    meshes_vc = model.extract_mesh(scene_codes, has_vertex_color=True, resolution=resolution)
+    mesh_vc = meshes_vc[0]
 
-    rot_x = trimesh.transformations.rotation_matrix(-np.pi / 2, [1, 0, 0], point=[0, 0, 0])
-    rot_y = trimesh.transformations.rotation_matrix(-np.pi / 2, [0, 1, 0], point=[0, 0, 0])
-    mesh.apply_transform(rot_x)
-    mesh.apply_transform(rot_y)
+    # Apply color correction to vertex colors
+    if hasattr(mesh_vc.visual, 'vertex_colors') and mesh_vc.visual.vertex_colors is not None:
+        vc = mesh_vc.visual.vertex_colors.astype(np.float32) / 255.0
+        rgb = vc[:, :3]
 
-    bounds = mesh.bounds
-    extents = bounds[1] - bounds[0]
-    scale = 1.0 / np.max(extents) * 1.2
-    mesh.vertices *= scale
+        # Auto-levels
+        for c in range(3):
+            c_min, c_max = np.percentile(rgb[:, c], [1, 99])
+            if c_max > c_min:
+                rgb[:, c] = np.clip((rgb[:, c] - c_min) / (c_max - c_min), 0, 1)
 
-    # Export mesh
-    mesh.export("/tmp/test_mesh.glb")
-    print("      Saved mesh to /tmp/test_mesh.glb")
+        # Saturation boost
+        gray = np.mean(rgb, axis=1, keepdims=True)
+        rgb = gray + (rgb - gray) * 1.3
+        rgb = np.clip(rgb, 0, 1)
 
-    # Render
-    print("\n[4/4] Rendering 8 directions...")
-    directions = [("N", 0), ("NE", 45), ("E", 90), ("SE", 135), ("S", 180), ("SW", 225), ("W", 270), ("NW", 315)]
+        # Contrast
+        rgb = (rgb - 0.5) * 1.2 + 0.5
+        rgb = np.clip(rgb, 0, 1)
 
+        # Update vertex colors
+        vc[:, :3] = rgb
+        mesh_vc.visual.vertex_colors = (vc * 255).astype(np.uint8)
+        print("      Applied color correction to vertex colors")
+
+    # Helper to transform mesh
+    def transform_mesh(m):
+        bounds = m.bounds
+        center = (bounds[0] + bounds[1]) / 2
+        m.vertices -= center
+
+        rot_x = trimesh.transformations.rotation_matrix(-np.pi / 2, [1, 0, 0], point=[0, 0, 0])
+        rot_y = trimesh.transformations.rotation_matrix(-np.pi / 2, [0, 1, 0], point=[0, 0, 0])
+        m.apply_transform(rot_x)
+        m.apply_transform(rot_y)
+
+        bounds = m.bounds
+        extents = bounds[1] - bounds[0]
+        scale = 1.0 / np.max(extents) * 1.2
+        m.vertices *= scale
+        return m
+
+    # Transform both meshes
+    mesh = transform_mesh(mesh)
+    mesh_vc = transform_mesh(mesh_vc)
+
+    # Export meshes
+    mesh.export("/tmp/test_mesh_textured.glb")
+    mesh_vc.export("/tmp/test_mesh_vertexcolors.glb")
+    print("      Saved meshes to /tmp/test_mesh_*.glb")
+
+    # Render both for comparison
+    print("\n[4/4] Rendering front view (N) for comparison...")
     os.makedirs("/tmp/test_renders", exist_ok=True)
 
-    for name, azimuth in directions:
-        print(f"      Rendering {name} ({azimuth}°)...")
-        color = render_mesh(mesh, azimuth, elevation=20.0, distance=1.5, size=512)
-        Image.fromarray(color).save(f"/tmp/test_renders/{name}.png")
+    # Render textured mesh
+    color_tex = render_mesh(mesh, 0, elevation=20.0, distance=1.5, size=512)
+    Image.fromarray(color_tex).save("/tmp/test_renders/N_textured.png")
+    print("      Saved /tmp/test_renders/N_textured.png")
+
+    # Render vertex color mesh
+    color_vc = render_mesh(mesh_vc, 0, elevation=20.0, distance=1.5, size=512)
+    Image.fromarray(color_vc).save("/tmp/test_renders/N_vertexcolors.png")
+    print("      Saved /tmp/test_renders/N_vertexcolors.png")
 
     print("\n" + "=" * 60)
-    print("Done! Output files:")
-    print("  - /tmp/test_texture.png (baked texture)")
-    print("  - /tmp/test_mesh.glb (3D mesh)")
-    print("  - /tmp/test_renders/*.png (rendered views)")
+    print("Done! Compare:")
+    print("  - /tmp/test_renders/N_textured.png (texture baking)")
+    print("  - /tmp/test_renders/N_vertexcolors.png (vertex colors + correction)")
     print("=" * 60)
 
 

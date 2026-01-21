@@ -323,6 +323,16 @@ class ImageTo3DMesh:
     def generate(self, model, image: torch.Tensor, resolution: int, unload_model: bool):
         global _triposr_model_cache
 
+        # Free up VRAM by unloading ComfyUI models (Flux, etc.) before TripoSR inference
+        try:
+            import comfy.model_management as mm
+            print("[TripoSR] Unloading ComfyUI models to free VRAM...")
+            mm.unload_all_models()
+            mm.soft_empty_cache()
+            print("[TripoSR] ComfyUI models unloaded")
+        except Exception as e:
+            print(f"[TripoSR] Could not unload ComfyUI models: {e}")
+
         # Convert ComfyUI IMAGE tensor (B, H, W, C) to PIL Image
         # ComfyUI images are float32 [0, 1]
         img_np = image[0].cpu().numpy()

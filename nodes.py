@@ -615,6 +615,12 @@ class RenderMesh8Directions:
                     rotation[:3, 2] *= -1
 
                 mesh_centered.apply_transform(rotation.T)  # Inverse rotation
+
+                # Rotate 180° around Y to face correct direction
+                rot_180 = trimesh.transformations.rotation_matrix(
+                    np.pi, [0, 1, 0], point=[0, 0, 0]
+                )
+                mesh_centered.apply_transform(rot_180)
                 print("[TripoSR] Auto-aligned mesh using PCA")
             except Exception as e:
                 print(f"[TripoSR] Auto-align failed: {e}, using manual rotation")

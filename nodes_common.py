@@ -22,6 +22,36 @@ if 'PYOPENGL_PLATFORM' not in os.environ:
 import pyrender
 
 
+def mesh_to_vertex_colors(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    """
+    Convert a textured mesh to use vertex colors instead.
+    This is needed for pyrender compatibility in headless mode.
+    """
+    # If mesh already has vertex colors and no complex textures, return as is
+    if hasattr(mesh.visual, 'vertex_colors') and mesh.visual.vertex_colors is not None:
+        if not hasattr(mesh.visual, 'material') or mesh.visual.material is None:
+            return mesh
+
+    try:
+        # Try to bake texture to vertex colors
+        if hasattr(mesh.visual, 'to_color'):
+            colored_visual = mesh.visual.to_color()
+            if hasattr(colored_visual, 'vertex_colors'):
+                return trimesh.Trimesh(
+                    vertices=mesh.vertices,
+                    faces=mesh.faces,
+                    vertex_colors=colored_visual.vertex_colors
+                )
+    except Exception as e:
+        print(f"[3DSprite] Could not convert texture to vertex colors: {e}")
+
+    # Fallback: create mesh without colors
+    return trimesh.Trimesh(
+        vertices=mesh.vertices,
+        faces=mesh.faces
+    )
+
+
 def resize_foreground(image: Image.Image, ratio: float = 0.85) -> Image.Image:
     """
     Resize foreground using alpha channel to find object bounds.
@@ -183,9 +213,12 @@ class RenderMesh8Directions:
         bg_color: Tuple[float, float, float, float]
     ) -> np.ndarray:
         """Render mesh from a single viewpoint."""
+        # Convert textured mesh to vertex colors for pyrender compatibility
+        render_mesh = mesh_to_vertex_colors(mesh)
+
         scene = pyrender.Scene(bg_color=bg_color, ambient_light=[0.6, 0.6, 0.6])
 
-        pyrender_mesh = pyrender.Mesh.from_trimesh(mesh, smooth=False)
+        pyrender_mesh = pyrender.Mesh.from_trimesh(render_mesh, smooth=False)
         scene.add(pyrender_mesh)
 
         camera = pyrender.PerspectiveCamera(yfov=np.pi / 3.0, aspectRatio=1.0)

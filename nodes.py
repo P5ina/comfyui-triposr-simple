@@ -369,38 +369,34 @@ class RenderMesh8Directions:
         bg_color: Tuple[float, float, float, float]
     ) -> np.ndarray:
         """Render mesh from a single viewpoint."""
-        # Create pyrender scene
-        scene = pyrender.Scene(bg_color=bg_color, ambient_light=[0.5, 0.5, 0.5])
+        # Create pyrender scene with more ambient light to show vertex colors
+        scene = pyrender.Scene(bg_color=bg_color, ambient_light=[0.7, 0.7, 0.7])
 
         # Convert trimesh to pyrender mesh
-        # TripoSR meshes have vertex colors
-        if hasattr(mesh.visual, 'vertex_colors') and mesh.visual.vertex_colors is not None:
-            material = pyrender.MetallicRoughnessMaterial(
-                metallicFactor=0.0,
-                roughnessFactor=1.0,
-                alphaMode='OPAQUE'
-            )
-            pyrender_mesh = pyrender.Mesh.from_trimesh(mesh, material=material)
-        else:
-            pyrender_mesh = pyrender.Mesh.from_trimesh(mesh)
-
+        # DON'T pass a material - let pyrender use vertex colors from trimesh
+        pyrender_mesh = pyrender.Mesh.from_trimesh(mesh, smooth=False)
         scene.add(pyrender_mesh)
 
-        # Add camera
-        camera = pyrender.PerspectiveCamera(yfov=np.pi / 4.0, aspectRatio=1.0)
+        # Add camera with wider FOV for better framing
+        camera = pyrender.PerspectiveCamera(yfov=np.pi / 3.0, aspectRatio=1.0)
         camera_pose = self._create_camera_pose(azimuth, elevation, distance)
         scene.add(camera, pose=camera_pose)
 
-        # Add lights
-        # Key light
-        key_light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=2.0)
-        key_pose = self._create_camera_pose(azimuth - 30, elevation + 30, 1.0)
+        # Add softer lights that don't wash out vertex colors
+        # Key light (main)
+        key_light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=1.5)
+        key_pose = self._create_camera_pose(azimuth - 45, elevation + 30, 1.0)
         scene.add(key_light, pose=key_pose)
 
-        # Fill light
-        fill_light = pyrender.DirectionalLight(color=[0.8, 0.8, 0.8], intensity=1.0)
-        fill_pose = self._create_camera_pose(azimuth + 60, elevation - 10, 1.0)
+        # Fill light (softer, opposite side)
+        fill_light = pyrender.DirectionalLight(color=[0.9, 0.9, 0.9], intensity=0.8)
+        fill_pose = self._create_camera_pose(azimuth + 45, elevation, 1.0)
         scene.add(fill_light, pose=fill_pose)
+
+        # Back light (rim)
+        back_light = pyrender.DirectionalLight(color=[0.8, 0.8, 0.8], intensity=0.5)
+        back_pose = self._create_camera_pose(azimuth + 180, elevation - 10, 1.0)
+        scene.add(back_light, pose=back_pose)
 
         # Render
         renderer = pyrender.OffscreenRenderer(size, size)
@@ -427,13 +423,17 @@ class RenderMesh8Directions:
         }
         bg_color = bg_colors.get(background_color, (1.0, 1.0, 1.0, 1.0))
 
-        # Center the mesh
+        # Center the mesh at origin using bounding box center
         mesh_centered = mesh.copy()
-        mesh_centered.vertices -= mesh_centered.centroid
+        bounds = mesh_centered.bounds  # [[min_x, min_y, min_z], [max_x, max_y, max_z]]
+        center = (bounds[0] + bounds[1]) / 2
+        mesh_centered.vertices -= center
 
-        # Scale to fit in unit sphere
-        scale = 1.0 / np.max(np.abs(mesh_centered.vertices))
-        mesh_centered.vertices *= scale * 0.8
+        # Scale to fit in unit cube, then apply 0.7 factor for padding
+        extents = bounds[1] - bounds[0]  # [width, height, depth]
+        max_extent = np.max(extents)
+        scale = 1.0 / max_extent
+        mesh_centered.vertices *= scale * 0.7
 
         rendered_images = []
 

@@ -338,11 +338,14 @@ class LoadHunyuan3DTextureModel:
 
         pipeline = Hunyuan3DPaintPipeline.from_pretrained(model_path)
 
+        # Hunyuan3DPaintPipeline doesn't support .to() method
+        # Always use CPU offload for memory management
         if low_vram_mode:
             pipeline.enable_model_cpu_offload()
-            print("[Hunyuan3D-Tex] Low VRAM mode enabled")
+            print("[Hunyuan3D-Tex] Low VRAM mode enabled (CPU offload)")
         else:
-            pipeline.to(device)
+            # No .to() available, pipeline manages device placement internally
+            print(f"[Hunyuan3D-Tex] Model loaded (device managed internally)")
 
         _hunyuan3d_texture_model_cache[cache_key] = pipeline
         print(f"[Hunyuan3D-Tex] Texture model loaded successfully")
@@ -422,8 +425,9 @@ class TextureMeshHunyuan:
 
         if unload_model:
             print("[Hunyuan3D-Tex] Unloading texture model...")
-            texture_model.to("cpu")
+            # Hunyuan3DPaintPipeline doesn't support .to(), just clear cache
             _hunyuan3d_texture_model_cache.clear()
+            del texture_model
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             print("[Hunyuan3D-Tex] Model unloaded")

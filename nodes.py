@@ -445,25 +445,39 @@ class ImageTo3DMesh:
                     texture_image = Image.fromarray(texture_colors).transpose(Image.FLIP_TOP_BOTTOM)
                     print("[TripoSR] Applied color correction to texture")
 
-                    # Sample texture at UV coordinates to create vertex colors
-                    # (pyrender has issues with textured meshes in headless mode)
+                    # Create textured mesh with proper UV mapping
+                    # This preserves full texture detail during rendering
+                    from scipy import ndimage
+
                     texture_array = np.array(texture_image)
                     tex_h, tex_w = texture_array.shape[:2]
 
-                    # Sample texture at each vertex's UV coordinate
-                    vertex_colors = np.zeros((len(new_vertices), 4), dtype=np.uint8)
-                    for i, uv in enumerate(uvs):
-                        # UV to pixel coordinates (flip V for image coordinates)
-                        px = int(np.clip(uv[0] * (tex_w - 1), 0, tex_w - 1))
-                        py = int(np.clip((1 - uv[1]) * (tex_h - 1), 0, tex_h - 1))
-                        vertex_colors[i] = texture_array[py, px]
-
-                    # Create mesh with vertex colors (color-corrected from texture)
+                    # Create mesh with texture (trimesh TextureVisuals)
                     mesh = trimesh.Trimesh(
                         vertices=new_vertices,
                         faces=new_faces,
-                        vertex_colors=vertex_colors,
                     )
+
+                    # Set up texture visual with UV coordinates
+                    from trimesh.visual import TextureVisuals
+                    from trimesh.visual.material import PBRMaterial
+
+                    # Create PBR material with the baked texture
+                    material = PBRMaterial(
+                        baseColorTexture=texture_image,
+                        metallicFactor=0.0,
+                        roughnessFactor=1.0,
+                    )
+
+                    mesh.visual = TextureVisuals(
+                        uv=uvs,
+                        material=material,
+                        image=texture_image,
+                    )
+
+                    # Store texture info for rendering
+                    mesh.metadata['texture_image'] = texture_image
+                    mesh.metadata['uvs'] = uvs
 
                     print(f"[TripoSR] Texture baked and converted to vertex colors: {texture_resolution}x{texture_resolution}")
                 except Exception as e:
@@ -576,6 +590,48 @@ class RenderMesh8Directions:
 
         return pose
 
+    def _sample_texture_bilinear(self, texture: np.ndarray, uv: np.ndarray) -> np.ndarray:
+        """Sample texture at UV coordinates using bilinear interpolation."""
+        from scipy import ndimage
+
+        tex_h, tex_w = texture.shape[:2]
+
+        # Convert UV to pixel coordinates
+        # UV origin is bottom-left, image origin is top-left
+        x = uv[:, 0] * (tex_w - 1)
+        y = (1 - uv[:, 1]) * (tex_h - 1)
+
+        # Sample each channel with bilinear interpolation
+        colors = np.zeros((len(uv), texture.shape[2]), dtype=np.float32)
+        for c in range(texture.shape[2]):
+            colors[:, c] = ndimage.map_coordinates(
+                texture[:, :, c].astype(np.float32),
+                [y, x],
+                order=1,  # Bilinear
+                mode='nearest'
+            )
+
+        return colors.astype(np.uint8)
+
+    def _convert_textured_to_vertex_colors(self, mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+        """Convert a textured mesh to vertex colors using bilinear sampling."""
+        if 'texture_image' not in mesh.metadata or 'uvs' not in mesh.metadata:
+            return mesh
+
+        texture_image = mesh.metadata['texture_image']
+        uvs = mesh.metadata['uvs']
+        texture_array = np.array(texture_image)
+
+        # Sample texture at UV coordinates with bilinear interpolation
+        vertex_colors = self._sample_texture_bilinear(texture_array, uvs)
+
+        # Create new mesh with vertex colors
+        return trimesh.Trimesh(
+            vertices=mesh.vertices.copy(),
+            faces=mesh.faces.copy(),
+            vertex_colors=vertex_colors,
+        )
+
     def _render_single_view(
         self,
         mesh: trimesh.Trimesh,
@@ -586,13 +642,17 @@ class RenderMesh8Directions:
         bg_color: Tuple[float, float, float, float]
     ) -> np.ndarray:
         """Render mesh from a single viewpoint."""
+        # Check if mesh has texture - convert to vertex colors for pyrender compatibility
+        render_mesh = mesh
+        if hasattr(mesh, 'metadata') and 'texture_image' in mesh.metadata:
+            render_mesh = self._convert_textured_to_vertex_colors(mesh)
+
         # Create pyrender scene - higher ambient for flatter, more "unlit" look
         # This preserves vertex colors better without harsh lighting
         scene = pyrender.Scene(bg_color=bg_color, ambient_light=[0.6, 0.6, 0.6])
 
         # Convert trimesh to pyrender mesh
-        # DON'T pass a material - let pyrender use vertex colors from trimesh
-        pyrender_mesh = pyrender.Mesh.from_trimesh(mesh, smooth=False)
+        pyrender_mesh = pyrender.Mesh.from_trimesh(render_mesh, smooth=False)
         scene.add(pyrender_mesh)
 
         # Add camera with wider FOV for better framing

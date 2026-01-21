@@ -317,10 +317,11 @@ class ImageTo3DMesh:
                 "image": ("IMAGE",),
                 "resolution": ("INT", {"default": 256, "min": 64, "max": 512, "step": 32}),
                 "unload_model": ("BOOLEAN", {"default": True}),
+                "color_boost": ("FLOAT", {"default": 1.2, "min": 0.5, "max": 3.0, "step": 0.1}),
             }
         }
 
-    def generate(self, model, image: torch.Tensor, resolution: int, unload_model: bool):
+    def generate(self, model, image: torch.Tensor, resolution: int, unload_model: bool, color_boost: float):
         global _triposr_model_cache
 
         # Free up VRAM by unloading ComfyUI models (Flux, etc.) before TripoSR inference
@@ -376,6 +377,25 @@ class ImageTo3DMesh:
 
         mesh = meshes[0]
         print(f"[TripoSR] Mesh generated: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
+
+        # Boost vertex colors to compensate for washed out TripoSR output
+        if color_boost != 1.0 and mesh.visual.vertex_colors is not None:
+            colors = mesh.visual.vertex_colors.astype(np.float32)
+            # Separate RGB and alpha
+            rgb = colors[:, :3] / 255.0
+            alpha = colors[:, 3:4] / 255.0
+
+            # Apply saturation boost: increase distance from gray
+            gray = np.mean(rgb, axis=1, keepdims=True)
+            rgb_boosted = gray + (rgb - gray) * color_boost
+
+            # Also apply slight gamma correction to brighten midtones
+            rgb_boosted = np.power(np.clip(rgb_boosted, 0, 1), 0.9)
+
+            # Recombine and convert back to uint8
+            colors_boosted = np.concatenate([rgb_boosted * 255, alpha * 255], axis=1).astype(np.uint8)
+            mesh.visual.vertex_colors = colors_boosted
+            print(f"[TripoSR] Applied color boost: {color_boost}x saturation")
 
         # Log mesh bounds for debugging
         if len(mesh.vertices) > 0:

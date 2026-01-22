@@ -228,9 +228,15 @@ class NVDiffrastRenderer:
             uvs_h = uvs.unsqueeze(0).contiguous()
             uv_interp, _ = dr.interpolate(uvs_h, rast, faces)
 
-            # Sample texture
-            uv_for_sample = uv_interp[0, :, :, :2]  # (H, W, 2)
-            uv_for_sample = uv_for_sample * 2 - 1  # Convert to [-1, 1]
+            # Sample texture using interpolated UVs
+            uv = uv_interp[0, :, :, :2]  # (H, W, 2)
+
+            # Flip V coordinate (textures have Y=0 at top, UVs have V=0 at bottom)
+            u = uv[:, :, 0:1]
+            v = 1.0 - uv[:, :, 1:2]
+
+            # Convert to grid_sample format [-1, 1], grid_sample expects (x, y) = (u, v)
+            uv_for_sample = torch.cat([u * 2 - 1, v * 2 - 1], dim=-1)
             uv_for_sample = uv_for_sample.unsqueeze(0)  # (1, H, W, 2)
 
             texture_4d = texture.permute(2, 0, 1).unsqueeze(0)  # (1, C, H, W)

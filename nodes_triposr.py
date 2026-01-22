@@ -189,15 +189,16 @@ class ImageTo3DMesh:
     def generate(self, model, image: torch.Tensor, resolution: int, seed: int, unload_model: bool, mask: torch.Tensor = None):
         global _triposr_model_cache
 
-        # Set seed for reproducibility
+        # Set seed for reproducibility (numpy requires seed < 2**32)
         import random
-        random.seed(seed)
-        np.random.seed(seed)
+        seed_32bit = seed % (2**32)
+        random.seed(seed_32bit)
+        np.random.seed(seed_32bit)
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed(seed)
             torch.cuda.manual_seed_all(seed)
-        print(f"[TripoSR] Using seed: {seed}")
+        print(f"[TripoSR] Using seed: {seed} (numpy: {seed_32bit})")
 
         # Free up VRAM
         try:

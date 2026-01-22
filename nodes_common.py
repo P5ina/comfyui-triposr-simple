@@ -216,8 +216,9 @@ class NVDiffrastRenderer:
         vertices_clip = (mvp @ vertices_h.T).T
 
         # Rasterize
+        # pos: [batch, num_vertices, 4], tri: [num_triangles, 3] (no batch dim!)
         vertices_clip = vertices_clip.unsqueeze(0).contiguous()
-        faces = faces.unsqueeze(0).contiguous()
+        faces = faces.contiguous()  # [num_triangles, 3] - no batch dimension
 
         rast, _ = dr.rasterize(self.glctx, vertices_clip, faces, resolution=[size, size])
 

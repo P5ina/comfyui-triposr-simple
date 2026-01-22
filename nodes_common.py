@@ -342,12 +342,16 @@ def resize_foreground(image: Image.Image, ratio: float = 0.85) -> Image.Image:
     return Image.fromarray(new_image)
 
 
-def rgba_to_rgb_white_background(image: Image.Image) -> Image.Image:
+def rgba_to_rgb_white_background(image: Image.Image, alpha_threshold: float = 0.5) -> Image.Image:
     """
     Convert RGBA to RGB by compositing with white background.
 
+    Applies alpha thresholding to remove semi-transparent areas (shadows).
+    Pixels with alpha < threshold become fully transparent (white background).
+
     Args:
         image: PIL Image in RGBA mode
+        alpha_threshold: Alpha values below this become fully transparent (0.0-1.0)
 
     Returns:
         RGB image with white background where transparency was
@@ -360,7 +364,11 @@ def rgba_to_rgb_white_background(image: Image.Image) -> Image.Image:
     rgb = image_np[:, :, :3]
     alpha = image_np[:, :, 3:4]
 
-    # Composite with white (1.0) background - required by Hunyuan3D
+    # Threshold alpha to remove semi-transparent areas (shadows)
+    # This prevents TripoSR from creating geometry for shadow pixels
+    alpha = np.where(alpha >= alpha_threshold, 1.0, 0.0)
+
+    # Composite with white (1.0) background
     composited = rgb * alpha + (1 - alpha) * 1.0
 
     result = (composited * 255.0).astype(np.uint8)

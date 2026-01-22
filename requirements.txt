@@ -12,6 +12,10 @@ trimesh>=4.0.0
 pyrender>=0.1.45
 PyOpenGL>=3.1.0
 
+# GPU-accelerated rendering with texture support (optional)
+# pip install --no-build-isolation git+https://github.com/NVlabs/nvdiffrast.git
+nvdiffrast>=0.4.0
+
 # Image processing
 Pillow>=9.0.0
 numpy>=1.23.0

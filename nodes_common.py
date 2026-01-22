@@ -231,11 +231,12 @@ class NVDiffrastRenderer:
             # Sample texture using interpolated UVs
             uv = uv_interp[0, :, :, :2]  # (H, W, 2)
 
-            # Flip V coordinate (textures have Y=0 at top, UVs have V=0 at bottom)
+            # Convert UVs [0,1] to grid_sample format [-1, 1]
+            # Note: Hunyuan3D already handles V coordinate orientation
             u = uv[:, :, 0:1]
-            v = 1.0 - uv[:, :, 1:2]
+            v = uv[:, :, 1:2]
 
-            # Convert to grid_sample format [-1, 1], grid_sample expects (x, y) = (u, v)
+            # grid_sample expects (x, y) coordinates in [-1, 1]
             uv_for_sample = torch.cat([u * 2 - 1, v * 2 - 1], dim=-1)
             uv_for_sample = uv_for_sample.unsqueeze(0)  # (1, H, W, 2)
 

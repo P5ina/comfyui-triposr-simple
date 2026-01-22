@@ -247,13 +247,21 @@ class NVDiffrastRenderer:
             # Gray fallback
             color = torch.full((size, size, 4), 0.7, device=self.device)
 
+        # Ensure color has 4 channels for proper masking
+        if color.shape[-1] == 3:
+            alpha_channel = torch.ones((size, size, 1), device=self.device)
+            color = torch.cat([color, alpha_channel], dim=-1)
+
         # Apply background where no geometry
         mask = rast[0, :, :, 3:4] > 0
-        bg = torch.tensor(bg_color, device=self.device).view(1, 1, 4)
+        bg = torch.tensor(bg_color, device=self.device, dtype=torch.float32).view(1, 1, 4)
         color = torch.where(mask, color, bg.expand(size, size, 4))
 
         # Convert to numpy uint8
         color = (color.clamp(0, 1) * 255).to(torch.uint8).cpu().numpy()
+
+        # Flip vertically - nvdiffrast uses different Y convention
+        color = np.flipud(color)
 
         # RGB only (drop alpha for output)
         return color[:, :, :3]

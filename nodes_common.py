@@ -389,12 +389,11 @@ class RenderMesh8Directions:
     """
     Renders a mesh from 8 cardinal and intercardinal directions.
     Returns 8 separate images: N, NE, E, SE, S, SW, W, NW.
-    Also outputs the mesh texture for debugging.
     """
 
     CATEGORY = "3DSprite"
-    RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE")
-    RETURN_NAMES = ("N", "NE", "E", "SE", "S", "SW", "W", "NW", "texture")
+    RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE")
+    RETURN_NAMES = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
     FUNCTION = "render"
 
     DIRECTIONS = [
@@ -605,37 +604,7 @@ class RenderMesh8Directions:
 
         print(f"[3DSprite] All 8 directions rendered at {render_size}x{render_size}")
 
-        # Extract texture for debugging
-        texture_tensor = None
-        try:
-            if hasattr(mesh.visual, 'material') and mesh.visual.material is not None:
-                mat = mesh.visual.material
-                tex_img = None
-                if hasattr(mat, 'image') and mat.image is not None:
-                    tex_img = np.array(mat.image)
-                    print(f"[3DSprite] Texture from material.image: {tex_img.shape}")
-                elif hasattr(mat, 'baseColorTexture') and mat.baseColorTexture is not None:
-                    tex_img = np.array(mat.baseColorTexture)
-                    print(f"[3DSprite] Texture from baseColorTexture: {tex_img.shape}")
-
-                if tex_img is not None:
-                    # Ensure RGB
-                    if len(tex_img.shape) == 2:
-                        tex_img = np.stack([tex_img] * 3, axis=-1)
-                    elif tex_img.shape[2] == 4:
-                        tex_img = tex_img[:, :, :3]
-
-                    texture_tensor = torch.from_numpy(tex_img.astype(np.float32) / 255.0)
-                    texture_tensor = texture_tensor.unsqueeze(0)
-        except Exception as e:
-            print(f"[3DSprite] Could not extract texture: {e}")
-
-        if texture_tensor is None:
-            # Return empty black image if no texture
-            texture_tensor = torch.zeros((1, 64, 64, 3), dtype=torch.float32)
-            print("[3DSprite] No texture found, returning black image")
-
-        return tuple(rendered_images) + (texture_tensor,)
+        return tuple(rendered_images)
 
 
 class PixelateImage:

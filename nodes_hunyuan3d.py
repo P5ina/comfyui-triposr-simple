@@ -425,8 +425,8 @@ class TextureMeshHunyuan:
     """
 
     CATEGORY = "Hunyuan3D"
-    RETURN_TYPES = ("MESH",)
-    RETURN_NAMES = ("textured_mesh",)
+    RETURN_TYPES = ("MESH", "IMAGE")
+    RETURN_NAMES = ("textured_mesh", "texture")
     FUNCTION = "texture"
 
     @classmethod
@@ -520,6 +520,37 @@ class TextureMeshHunyuan:
 
         print(f"[Hunyuan3D-Tex] Texturing complete")
 
+        # Extract texture image for debugging
+        texture_tensor = None
+        try:
+            if hasattr(textured_mesh.visual, 'material') and textured_mesh.visual.material is not None:
+                mat = textured_mesh.visual.material
+                tex_img = None
+                if hasattr(mat, 'image') and mat.image is not None:
+                    tex_img = np.array(mat.image)
+                    print(f"[Hunyuan3D-Tex] Texture from material.image: {tex_img.shape}")
+                elif hasattr(mat, 'baseColorTexture') and mat.baseColorTexture is not None:
+                    tex_img = np.array(mat.baseColorTexture)
+                    print(f"[Hunyuan3D-Tex] Texture from baseColorTexture: {tex_img.shape}")
+
+                if tex_img is not None:
+                    # Ensure RGB
+                    if len(tex_img.shape) == 2:
+                        tex_img = np.stack([tex_img] * 3, axis=-1)
+                    elif tex_img.shape[2] == 4:
+                        tex_img = tex_img[:, :, :3]
+
+                    texture_tensor = torch.from_numpy(tex_img.astype(np.float32) / 255.0)
+                    texture_tensor = texture_tensor.unsqueeze(0)
+                    print(f"[Hunyuan3D-Tex] Texture tensor shape: {texture_tensor.shape}")
+        except Exception as e:
+            print(f"[Hunyuan3D-Tex] Could not extract texture: {e}")
+
+        if texture_tensor is None:
+            # Return empty black image if no texture
+            texture_tensor = torch.zeros((1, 64, 64, 3), dtype=torch.float32)
+            print("[Hunyuan3D-Tex] No texture found, returning black image")
+
         if unload_model:
             print("[Hunyuan3D-Tex] Unloading texture model...")
             # Hunyuan3DPaintPipeline doesn't support .to(), just clear cache
@@ -529,7 +560,7 @@ class TextureMeshHunyuan:
                 torch.cuda.empty_cache()
             print("[Hunyuan3D-Tex] Model unloaded")
 
-        return (textured_mesh,)
+        return (textured_mesh, texture_tensor)
 
 
 # Node mappings

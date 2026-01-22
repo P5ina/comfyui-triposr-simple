@@ -349,19 +349,17 @@ def resize_foreground(image: Image.Image, ratio: float = 0.85) -> Image.Image:
     return Image.fromarray(new_image)
 
 
-def rgba_to_rgb_white_background(image: Image.Image, alpha_threshold: float = 0.5) -> Image.Image:
+def rgba_to_rgb_with_background(image: Image.Image, bg_color: float = 0.5, alpha_threshold: float = 0.5) -> Image.Image:
     """
-    Convert RGBA to RGB by compositing with white background.
-
-    Applies alpha thresholding to remove semi-transparent areas (shadows).
-    Pixels with alpha < threshold become fully transparent (white background).
+    Convert RGBA to RGB by compositing with specified background color.
 
     Args:
         image: PIL Image in RGBA mode
+        bg_color: Background color value (0.0=black, 0.5=gray, 1.0=white)
         alpha_threshold: Alpha values below this become fully transparent (0.0-1.0)
 
     Returns:
-        RGB image with white background where transparency was
+        RGB image with specified background color where transparency was
     """
     image_np = np.array(image).astype(np.float32) / 255.0
 
@@ -372,18 +370,23 @@ def rgba_to_rgb_white_background(image: Image.Image, alpha_threshold: float = 0.
     alpha = image_np[:, :, 3:4]
 
     # Threshold alpha to remove semi-transparent areas (shadows)
-    # This prevents TripoSR from creating geometry for shadow pixels
     alpha = np.where(alpha >= alpha_threshold, 1.0, 0.0)
 
-    # Composite with white (1.0) background
-    composited = rgb * alpha + (1 - alpha) * 1.0
+    # Composite with specified background color
+    composited = rgb * alpha + (1 - alpha) * bg_color
 
     result = (composited * 255.0).astype(np.uint8)
     return Image.fromarray(result, 'RGB')
 
 
-# Keep alias for backwards compatibility
-rgba_to_rgb_gray_background = rgba_to_rgb_white_background
+def rgba_to_rgb_gray_background(image: Image.Image, alpha_threshold: float = 0.5) -> Image.Image:
+    """Convert RGBA to RGB with gray (0.5) background - for TripoSR."""
+    return rgba_to_rgb_with_background(image, bg_color=0.5, alpha_threshold=alpha_threshold)
+
+
+def rgba_to_rgb_white_background(image: Image.Image, alpha_threshold: float = 0.5) -> Image.Image:
+    """Convert RGBA to RGB with white (1.0) background - for Hunyuan3D."""
+    return rgba_to_rgb_with_background(image, bg_color=1.0, alpha_threshold=alpha_threshold)
 
 
 class RenderMesh8Directions:

@@ -162,7 +162,8 @@ class ImageTo3DMesh:
     """
     Converts an input image to a 3D mesh using TripoSR.
 
-    For best results, provide an RGBA image with transparent background.
+    For best results, provide an image with a mask for transparent background.
+    Connect MASK output from RMBG node to the mask input.
     """
 
     CATEGORY = "TripoSR"
@@ -179,10 +180,13 @@ class ImageTo3DMesh:
                 "resolution": ("INT", {"default": 256, "min": 64, "max": 512, "step": 32}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
                 "unload_model": ("BOOLEAN", {"default": True}),
+            },
+            "optional": {
+                "mask": ("MASK",),
             }
         }
 
-    def generate(self, model, image: torch.Tensor, resolution: int, seed: int, unload_model: bool):
+    def generate(self, model, image: torch.Tensor, resolution: int, seed: int, unload_model: bool, mask: torch.Tensor = None):
         global _triposr_model_cache
 
         # Set seed for reproducibility
@@ -208,7 +212,30 @@ class ImageTo3DMesh:
         img_np = image[0].cpu().numpy()
         img_np = (img_np * 255).astype(np.uint8)
 
-        if img_np.shape[2] == 4:
+        # If mask is provided, combine RGB image with mask to create RGBA
+        if mask is not None:
+            mask_np = mask[0].cpu().numpy()
+            mask_np = (mask_np * 255).astype(np.uint8)
+
+            # Ensure mask matches image size
+            if mask_np.shape[:2] != img_np.shape[:2]:
+                from PIL import Image as PILImage
+                mask_pil = PILImage.fromarray(mask_np)
+                mask_pil = mask_pil.resize((img_np.shape[1], img_np.shape[0]), PILImage.Resampling.LANCZOS)
+                mask_np = np.array(mask_pil)
+
+            # Create RGBA by combining RGB + mask as alpha
+            if len(img_np.shape) == 3 and img_np.shape[2] == 3:
+                rgba_np = np.dstack([img_np, mask_np])
+                pil_image = Image.fromarray(rgba_np, 'RGBA')
+                print(f"[TripoSR] Input: RGB image + MASK -> RGBA {pil_image.size}")
+            else:
+                pil_image = Image.fromarray(img_np[:, :, :4], 'RGBA')
+                print(f"[TripoSR] Input: RGBA image {pil_image.size}")
+
+            pil_image = resize_foreground(pil_image, ratio=0.85)
+            pil_image = rgba_to_rgb_gray_background(pil_image)
+        elif img_np.shape[2] == 4:
             pil_image = Image.fromarray(img_np, 'RGBA')
             print(f"[TripoSR] Input: RGBA image {pil_image.size}")
 
@@ -217,7 +244,7 @@ class ImageTo3DMesh:
         else:
             pil_image = Image.fromarray(img_np, 'RGB')
             print(f"[TripoSR] Input: RGB image {pil_image.size}")
-            print("[TripoSR] Warning: For best results, use RGBA image with transparent background")
+            print("[TripoSR] Warning: For best results, connect MASK from RMBG node")
 
         if pil_image.mode != 'RGB':
             pil_image = pil_image.convert('RGB')

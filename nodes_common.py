@@ -12,8 +12,16 @@ import os
 import numpy as np
 import torch
 from PIL import Image
-from typing import Tuple
+from typing import Tuple, Optional
 import trimesh
+
+# Try to import nvdiffrast for GPU texture rendering
+try:
+    import nvdiffrast.torch as dr
+    HAS_NVDIFFRAST = True
+except ImportError:
+    HAS_NVDIFFRAST = False
+    print("[3DSprite] nvdiffrast not available, falling back to pyrender")
 
 # Set headless rendering platform before importing pyrender
 if 'PYOPENGL_PLATFORM' not in os.environ:
@@ -99,6 +107,174 @@ def bake_texture_to_vertex_colors(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
         faces=mesh.faces,
         vertex_colors=gray
     )
+
+
+class NVDiffrastRenderer:
+    """GPU-accelerated renderer using nvdiffrast for proper texture support."""
+
+    def __init__(self, device: str = "cuda"):
+        self.device = torch.device(device)
+        self.glctx = dr.RasterizeCudaContext()
+
+    def _make_projection_matrix(self, fov_y: float, aspect: float, near: float, far: float) -> torch.Tensor:
+        """Create perspective projection matrix."""
+        f = 1.0 / np.tan(fov_y / 2)
+        return torch.tensor([
+            [f / aspect, 0, 0, 0],
+            [0, f, 0, 0],
+            [0, 0, (far + near) / (near - far), (2 * far * near) / (near - far)],
+            [0, 0, -1, 0]
+        ], dtype=torch.float32, device=self.device)
+
+    def _make_view_matrix(self, azimuth: float, elevation: float, distance: float) -> torch.Tensor:
+        """Create view matrix from spherical coordinates."""
+        azimuth_rad = np.radians(azimuth)
+        elevation_rad = np.radians(elevation)
+
+        # Camera position
+        x = distance * np.cos(elevation_rad) * np.sin(azimuth_rad)
+        y = distance * np.sin(elevation_rad)
+        z = distance * np.cos(elevation_rad) * np.cos(azimuth_rad)
+
+        eye = np.array([x, y, z])
+        target = np.array([0, 0, 0])
+        up = np.array([0, 1, 0])
+
+        # Look-at matrix
+        forward = target - eye
+        forward = forward / np.linalg.norm(forward)
+
+        right = np.cross(forward, up)
+        right = right / np.linalg.norm(right)
+
+        up = np.cross(right, forward)
+
+        view = np.eye(4)
+        view[0, :3] = right
+        view[1, :3] = up
+        view[2, :3] = -forward
+        view[:3, 3] = -np.dot(view[:3, :3], eye)
+
+        return torch.tensor(view, dtype=torch.float32, device=self.device)
+
+    def render(
+        self,
+        mesh: trimesh.Trimesh,
+        azimuth: float,
+        elevation: float,
+        distance: float,
+        size: int,
+        bg_color: Tuple[float, float, float, float]
+    ) -> np.ndarray:
+        """Render mesh with textures using nvdiffrast."""
+
+        # Get mesh data
+        vertices = torch.tensor(mesh.vertices, dtype=torch.float32, device=self.device)
+        faces = torch.tensor(mesh.faces, dtype=torch.int32, device=self.device)
+
+        # Get texture and UVs if available
+        has_texture = False
+        texture = None
+        uvs = None
+
+        if hasattr(mesh.visual, 'uv') and mesh.visual.uv is not None:
+            uvs = torch.tensor(mesh.visual.uv, dtype=torch.float32, device=self.device)
+
+            if hasattr(mesh.visual, 'material') and mesh.visual.material is not None:
+                mat = mesh.visual.material
+                tex_img = None
+                if hasattr(mat, 'image') and mat.image is not None:
+                    tex_img = np.array(mat.image)
+                elif hasattr(mat, 'baseColorTexture') and mat.baseColorTexture is not None:
+                    tex_img = np.array(mat.baseColorTexture)
+
+                if tex_img is not None:
+                    # Ensure RGBA
+                    if len(tex_img.shape) == 2:
+                        tex_img = np.stack([tex_img] * 3 + [np.full_like(tex_img, 255)], axis=-1)
+                    elif tex_img.shape[2] == 3:
+                        tex_img = np.concatenate([tex_img, np.full(tex_img.shape[:2] + (1,), 255, dtype=np.uint8)], axis=-1)
+
+                    texture = torch.tensor(tex_img, dtype=torch.float32, device=self.device) / 255.0
+                    has_texture = True
+
+        # Get vertex colors as fallback
+        vertex_colors = None
+        if hasattr(mesh.visual, 'vertex_colors') and mesh.visual.vertex_colors is not None:
+            vc = mesh.visual.vertex_colors
+            if len(vc.shape) == 2 and vc.shape[1] >= 3:
+                vertex_colors = torch.tensor(vc[:, :4] if vc.shape[1] >= 4 else np.hstack([vc[:, :3], np.full((len(vc), 1), 255)]),
+                                           dtype=torch.float32, device=self.device) / 255.0
+
+        # Build MVP matrix
+        proj = self._make_projection_matrix(np.pi / 3, 1.0, 0.1, 100.0)
+        view = self._make_view_matrix(azimuth, elevation, distance)
+        mvp = proj @ view
+
+        # Transform vertices to clip space
+        vertices_h = torch.cat([vertices, torch.ones(vertices.shape[0], 1, device=self.device)], dim=1)
+        vertices_clip = (mvp @ vertices_h.T).T
+
+        # Rasterize
+        vertices_clip = vertices_clip.unsqueeze(0).contiguous()
+        faces = faces.unsqueeze(0).contiguous()
+
+        rast, _ = dr.rasterize(self.glctx, vertices_clip, faces, resolution=[size, size])
+
+        # Interpolate colors/textures
+        if has_texture and uvs is not None:
+            # Interpolate UVs
+            uvs_h = uvs.unsqueeze(0).contiguous()
+            uv_interp, _ = dr.interpolate(uvs_h, rast, faces)
+
+            # Sample texture
+            uv_for_sample = uv_interp[0, :, :, :2]  # (H, W, 2)
+            uv_for_sample = uv_for_sample * 2 - 1  # Convert to [-1, 1]
+            uv_for_sample = uv_for_sample.unsqueeze(0)  # (1, H, W, 2)
+
+            texture_4d = texture.permute(2, 0, 1).unsqueeze(0)  # (1, C, H, W)
+            color = torch.nn.functional.grid_sample(texture_4d, uv_for_sample, mode='bilinear', padding_mode='border', align_corners=True)
+            color = color.squeeze(0).permute(1, 2, 0)  # (H, W, C)
+
+        elif vertex_colors is not None:
+            # Interpolate vertex colors
+            vc_h = vertex_colors.unsqueeze(0).contiguous()
+            color, _ = dr.interpolate(vc_h, rast, faces)
+            color = color[0]  # (H, W, C)
+
+        else:
+            # Gray fallback
+            color = torch.full((size, size, 4), 0.7, device=self.device)
+
+        # Apply background where no geometry
+        mask = rast[0, :, :, 3:4] > 0
+        bg = torch.tensor(bg_color, device=self.device).view(1, 1, 4)
+        color = torch.where(mask, color, bg.expand(size, size, 4))
+
+        # Convert to numpy uint8
+        color = (color.clamp(0, 1) * 255).to(torch.uint8).cpu().numpy()
+
+        # RGB only (drop alpha for output)
+        return color[:, :, :3]
+
+
+# Global renderer instance
+_nvdiffrast_renderer: Optional[NVDiffrastRenderer] = None
+
+
+def get_nvdiffrast_renderer() -> Optional[NVDiffrastRenderer]:
+    """Get or create global nvdiffrast renderer."""
+    global _nvdiffrast_renderer
+    if not HAS_NVDIFFRAST:
+        return None
+    if _nvdiffrast_renderer is None:
+        try:
+            _nvdiffrast_renderer = NVDiffrastRenderer()
+            print("[3DSprite] Initialized nvdiffrast renderer")
+        except Exception as e:
+            print(f"[3DSprite] Could not initialize nvdiffrast: {e}")
+            return None
+    return _nvdiffrast_renderer
 
 
 def resize_foreground(image: Image.Image, ratio: float = 0.85) -> Image.Image:
@@ -262,7 +438,16 @@ class RenderMesh8Directions:
         bg_color: Tuple[float, float, float, float]
     ) -> np.ndarray:
         """Render mesh from a single viewpoint."""
-        # Convert textured mesh to vertex colors for pyrender compatibility
+
+        # Try nvdiffrast first (better texture support)
+        nvrenderer = get_nvdiffrast_renderer()
+        if nvrenderer is not None:
+            try:
+                return nvrenderer.render(mesh, azimuth, elevation, distance, size, bg_color)
+            except Exception as e:
+                print(f"[3DSprite] nvdiffrast render failed: {e}, falling back to pyrender")
+
+        # Fallback to pyrender with baked vertex colors
         render_mesh = bake_texture_to_vertex_colors(mesh)
 
         scene = pyrender.Scene(bg_color=bg_color, ambient_light=[0.6, 0.6, 0.6])

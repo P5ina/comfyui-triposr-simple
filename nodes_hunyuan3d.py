@@ -260,10 +260,10 @@ class ImageTo3DMeshHunyuan:
             print("[Hunyuan3D] WARNING: No mask provided! Background will be included in 3D model.")
             print("[Hunyuan3D] Connect a MASK input to separate foreground from background.")
 
-        # Preprocess: resize foreground and convert to RGB
+        # Preprocess: resize foreground (keep RGBA - Hunyuan3D uses alpha as mask)
         if pil_image.mode == 'RGBA':
             pil_image = resize_foreground(pil_image, ratio=0.85)
-            pil_image = rgba_to_rgb_gray_background(pil_image)
+            # Don't convert to RGB! Hunyuan3D's preprocessor handles RGBA and uses alpha as mask
 
         # Set seed
         generator = None

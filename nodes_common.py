@@ -22,33 +22,82 @@ if 'PYOPENGL_PLATFORM' not in os.environ:
 import pyrender
 
 
-def mesh_to_vertex_colors(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+def bake_texture_to_vertex_colors(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     """
-    Convert a textured mesh to use vertex colors instead.
-    This is needed for pyrender compatibility in headless mode.
+    Bake UV texture to vertex colors for rendering compatibility.
+    Samples the texture at each vertex's UV coordinate.
     """
-    # If mesh already has vertex colors and no complex textures, return as is
-    if hasattr(mesh.visual, 'vertex_colors') and mesh.visual.vertex_colors is not None:
-        if not hasattr(mesh.visual, 'material') or mesh.visual.material is None:
-            return mesh
-
     try:
-        # Try to bake texture to vertex colors
-        if hasattr(mesh.visual, 'to_color'):
-            colored_visual = mesh.visual.to_color()
-            if hasattr(colored_visual, 'vertex_colors'):
+        visual = mesh.visual
+
+        # Check if it's a TextureVisuals with UV mapping
+        if hasattr(visual, 'uv') and hasattr(visual, 'material'):
+            uv = visual.uv
+            material = visual.material
+
+            # Get the texture image
+            texture_image = None
+            if hasattr(material, 'image') and material.image is not None:
+                texture_image = np.array(material.image)
+            elif hasattr(material, 'baseColorTexture') and material.baseColorTexture is not None:
+                texture_image = np.array(material.baseColorTexture)
+
+            if texture_image is not None and uv is not None:
+                h, w = texture_image.shape[:2]
+
+                # Sample texture at UV coordinates
+                u = np.clip(uv[:, 0], 0, 1)
+                v = np.clip(1 - uv[:, 1], 0, 1)  # Flip V
+
+                px = (u * (w - 1)).astype(int)
+                py = (v * (h - 1)).astype(int)
+
+                # Sample colors
+                if len(texture_image.shape) == 3:
+                    if texture_image.shape[2] == 4:
+                        vertex_colors = texture_image[py, px, :]  # RGBA
+                    else:
+                        rgb = texture_image[py, px, :3]
+                        alpha = np.full((len(rgb), 1), 255, dtype=np.uint8)
+                        vertex_colors = np.hstack([rgb, alpha])
+                else:
+                    # Grayscale
+                    gray = texture_image[py, px]
+                    vertex_colors = np.stack([gray, gray, gray, np.full_like(gray, 255)], axis=-1)
+
+                print(f"[3DSprite] Baked texture to {len(vertex_colors)} vertex colors")
+
                 return trimesh.Trimesh(
                     vertices=mesh.vertices,
                     faces=mesh.faces,
-                    vertex_colors=colored_visual.vertex_colors
+                    vertex_colors=vertex_colors
                 )
-    except Exception as e:
-        print(f"[3DSprite] Could not convert texture to vertex colors: {e}")
 
-    # Fallback: create mesh without colors
+        # Try trimesh's built-in conversion
+        if hasattr(visual, 'to_color'):
+            colored = visual.to_color()
+            if hasattr(colored, 'vertex_colors') and colored.vertex_colors is not None:
+                print(f"[3DSprite] Converted visual to vertex colors")
+                return trimesh.Trimesh(
+                    vertices=mesh.vertices,
+                    faces=mesh.faces,
+                    vertex_colors=colored.vertex_colors
+                )
+
+        # Check for existing vertex colors
+        if hasattr(visual, 'vertex_colors') and visual.vertex_colors is not None:
+            return mesh
+
+    except Exception as e:
+        print(f"[3DSprite] Could not bake texture: {e}")
+
+    # Fallback: gray mesh
+    print(f"[3DSprite] Warning: No colors found, using gray")
+    gray = np.full((len(mesh.vertices), 4), [180, 180, 180, 255], dtype=np.uint8)
     return trimesh.Trimesh(
         vertices=mesh.vertices,
-        faces=mesh.faces
+        faces=mesh.faces,
+        vertex_colors=gray
     )
 
 
@@ -214,7 +263,7 @@ class RenderMesh8Directions:
     ) -> np.ndarray:
         """Render mesh from a single viewpoint."""
         # Convert textured mesh to vertex colors for pyrender compatibility
-        render_mesh = mesh_to_vertex_colors(mesh)
+        render_mesh = bake_texture_to_vertex_colors(mesh)
 
         scene = pyrender.Scene(bg_color=bg_color, ambient_light=[0.6, 0.6, 0.6])
 

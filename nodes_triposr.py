@@ -177,12 +177,23 @@ class ImageTo3DMesh:
                 "model": ("TRIPOSR_MODEL",),
                 "image": ("IMAGE",),
                 "resolution": ("INT", {"default": 256, "min": 64, "max": 512, "step": 32}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
                 "unload_model": ("BOOLEAN", {"default": True}),
             }
         }
 
-    def generate(self, model, image: torch.Tensor, resolution: int, unload_model: bool):
+    def generate(self, model, image: torch.Tensor, resolution: int, seed: int, unload_model: bool):
         global _triposr_model_cache
+
+        # Set seed for reproducibility
+        import random
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)
+        print(f"[TripoSR] Using seed: {seed}")
 
         # Free up VRAM
         try:
